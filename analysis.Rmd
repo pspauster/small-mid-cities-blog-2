@@ -1,5 +1,5 @@
 ---
-title: "A Class of Their Own: Housing Characteristics of Small and Mid-Size Cities"
+title: "A Class of Their Own: Supportive Housing in Small and Mid-Size Cities"
 subtitle: "NYU Furman Center"
 date: "`r Sys.Date()`"
 output:
@@ -9,8 +9,8 @@ output:
     code_folding: show
 ---
 
-The analysis presented here appears in the blog post [_Housing Characteristics of Small and Mid-Sized Cities
-_](https://furmancenter.org/thestoop/entry/housing-characteristics-of-small-and-mid-sized-cities)
+The analysis presented here appears in the blog post [_Supportive Housing Small and Mid-Sized Cities
+_](link)
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(
@@ -37,8 +37,9 @@ library(jsonlite)
 library(ggplot2) # making graphs
 library(acssf)
 library(ggrepel)
+library(getarc)
 
-
+options(tigris_use_cache = TRUE)
 # Creating a color blind friendly palette using https://colorbrewer2.org/#type=diverging&scheme=BrBG&n=4
 city_size_pal <- c(
   "#a6611a",
@@ -50,15 +51,12 @@ city_size_pal <- c(
 ```
 
 ## Defining External Variables
-We utilize Bureau of Labor Statistics' Consumer Price Index (CPI) factor to normalize rents between 2000 and 2019. To access 2000 Decennial data, we use the US Census Bureau's API, which requires an access key.
+ To access 2019 ACS data, we use the US Census Bureau's API, which requires an access key.
 ```{r}
-### CPI (Consumer Price Index) to adjust for inflation between 2000 and 2019
-#Add inflation factor: 2000 rents in 2019 dollars (source: https://www.bls.gov/data/inflation_calculator.htm)
-CPI <- 1.49118 # Change the CPI to represent the studied years using the bls inflation calculator. 
 
 ### Census API Key
 # Input your census API key below to access the census data. You can sign-up for a key here:https://api.census.gov/data/key_signup.html
-census_api_key = "c32dfbf7d25fe9558fd11bf021780457970f96ff"
+census_api_key = "2a8badf7045fdf93b91b5c21b184939b04cffb09"
 
 ```
 
@@ -72,14 +70,17 @@ For this blog post we use the American Community Survey 5-year estimate data for
 # Searching census codes
 v19 <- load_variables(2019, "acs5", cache = TRUE)
 
+my_states <- state.abb
+
 # Pull in census variables
 census_2019 <- get_acs(
   geography = "place",
   year = 2019,
   survey = "acs5",
   output = "wide",
-  geometry = FALSE,
-  moe_sum = FALSE,
+  state = my_states,
+  geometry = TRUE,
+  #moe_sum = FALSE,
   variables = c(
     "B01003_001E", # pop_num,
     "B03002_006E", # pop_race_asian_num
@@ -213,8 +214,26 @@ In this analysis, we drop cities that are outside of the 50-states and DC (e.g.,
 small_mid_explore <- filter(small_mid_explore, ! geoid %in% c("0464210", "0621230", "0637692", "0646842", "0812815", "1200410", "1245060", "1310944", "1319000", "1342425", "1349008", "1372122", "1373784", "1571550", "2148006", "2578972", "2483775", "5103320", "5367167", "1271625", "7276770", "7206593", "7214290", "7263820", "7210334", "7232522", "7252431" ))
 ```
 
-
 ## Wrangling Data
+
+### Get Data on PHA Geographies
+
+We will match city level data to PHA geographies from the HUD Estimated Housing Authority Service Areas from PD&R (https://hudgis-hud.opendata.arcgis.com/datasets/HUD::estimated-housing-authority-service-areas/about)
+
+```{r}
+
+pha_geo <- query_layer(endpoint = "https://services.arcgis.com/VTyQ9soqVukalItT/arcgis/rest/services/Proposed_Housing_Authority_Service_Areas/FeatureServer/0")
+
+
+```
+
+
+
+
+
+
+
+
 
 
 #### 2000 Decenial Census data and principal city indicator
