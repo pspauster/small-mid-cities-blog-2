@@ -46,6 +46,8 @@ library(sf)
 
 sf::sf_use_s2(FALSE)
 options(tigris_use_cache = TRUE)
+options(scipen = 999)
+
 # Creating a color blind friendly palette using https://colorbrewer2.org/#type=diverging&scheme=BrBG&n=4
 city_size_pal <- c(
   "#a6611a",
@@ -72,7 +74,7 @@ census_api_key = "2a8badf7045fdf93b91b5c21b184939b04cffb09"
 
 #### 5-Year American Community Survey (ACS) Data 2015-2019
 For this blog post we use the American Community Survey 5-year estimate data for 2015 to 2019. 
-```{r results='hide'}
+```{r message=FALSE}
 # Searching census codes
 v19 <- load_variables(2019, "acs5", cache = TRUE)
 
@@ -207,17 +209,16 @@ census_2019 <- census_2019 %>%
     "size_type"
   )
 
-# Save as a data frame
-small_mid_explore <- data.frame(census_2019)
 ```
-
 
 ## Exclude Cities
 In this analysis, we drop cities that are outside of the 50-states and DC (e.g., in the US Territories). We also exclude cities that are newly established since the 2000 Census and those that merged with their county jurisdiction to form a unified government during that period as well, so that we have a consistent sample of cities for the analysis. 
 
 ```{r}
 # Dropping cities that were not included in the 2000 census, cities outside the 50-states, and those that merged with their county jurisdiction to form a unified government over the period.
-small_mid_explore <- filter(small_mid_explore, ! geoid %in% c("0464210", "0621230", "0637692", "0646842", "0812815", "1200410", "1245060", "1310944", "1319000", "1342425", "1349008", "1372122", "1373784", "1571550", "2148006", "2578972", "2483775", "5103320", "5367167", "1271625", "7276770", "7206593", "7214290", "7263820", "7210334", "7232522", "7252431" ))
+exclude <- c("0464210", "0621230", "0637692", "0646842", "0812815", "1200410", "1245060", "1310944", "1319000", "1342425", "1349008", "1372122", "1373784", "1571550", "2148006", "2578972", "2483775", "5103320", "5367167", "1271625", "7276770", "7206593", "7214290", "7263820", "7210334", "7232522", "7252431" )
+
+small_mid_explore <- filter(as.data.frame(census_2019), ! geoid %in% exclude)
 ```
 
 ## Wrangling Data
@@ -331,11 +332,12 @@ psh_places_wide <- psh_places %>%
 
 ```{r}
 
-psh_pha_geo <- left_join(psh_phas_wide, pha_geo, by = "participant_code") %>% 
+psh_phas_geo <- left_join(psh_phas_wide, pha_geo, by = "participant_code") %>% 
   st_as_sf() %>% 
-  st_make_valid()
+  st_make_valid() %>% 
+  mutate(pha_area = st_area(geometry))
 
-anti <- anti_join(psh_phas_wide, pha_geo, by = "participant_code") #two small HA don't have shapes -FL076 RIVIERA BEACH HOUSING AUTHORITY MA187 Berkshire County Regional Housing Authority The remainder are US territories, which are excluded from this analysis.
+phas_anti <- anti_join(psh_phas_wide, pha_geo, by = "participant_code") #two small HA don't have shapes -FL076 RIVIERA BEACH HOUSING AUTHORITY MA187 Berkshire County Regional Housing Authority The remainder are US territories, which are excluded from this analysis.
 ```
 
 
@@ -343,10 +345,11 @@ anti <- anti_join(psh_phas_wide, pha_geo, by = "participant_code") #two small HA
 
 ```{r}
 psh_places_geo <- left_join(census_2019, psh_places_wide, by = "geoid") %>% 
-  st_transform(st_crs(psh_pha_geo)) %>% 
-  st_make_valid()
+  st_transform(st_crs(psh_phas_geo)) %>% 
+  st_make_valid() %>% 
+  mutate(place_area = st_area(geometry))
 
-test <- anti_join(census_2019, psh_places_wide, by = "geoid")
+places_anti <- anti_join(census_2019, psh_places_wide, by = "geoid")
 # No PSH data for 6 cities
 # Macon-Bibb County, GA
 # Jurupa valley city, CA
@@ -361,9 +364,35 @@ test <- anti_join(census_2019, psh_places_wide, by = "geoid")
 
 ```{r}
 
-phas_places_join <- st_intersection(psh_places_geo, psh_pha_geo)
+phas_places_join <- st_intersection(psh_places_geo, psh_phas_geo)
 
 ```
+
+## Analysis
+### PHA level for small and mid-sized cities
+
+```{r}
+
+all_cities_joined <- filter(phas_places_join, ! geoid %in% c("0464210", "0621230", "0637692", "0646842", "0812815", "1200410", "1245060", "1310944", "1319000", "1342425", "1349008", "1372122", "1373784", "1571550", "2148006", "2578972", "2483775", "5103320", "5367167", "1271625", "7276770", "7206593", "7214290", "7263820", "7210334", "7232522", "7252431" ))%>% 
+  group_by(geoid) %>% 
+  mutate(n_phas_matched = n(),
+         overlap_area = st_area(geometry),
+         percent_cover_city = as.double(overlap_area/place_area),
+         percent_cover_pha = as.double(overlap_area/pha_area)) %>% 
+  relocate(
+    c(objectid,  stusab, formal_participant_name, pct_share,  sumlev, pha_level, n_phas_matched, overlap_area,
+      percent_cover_city, percent_cover_pha, geometry),
+    .before = pop_num) %>% 
+  mutate(badmatch = if_else(percent_cover_city <.25 & percent_cover_pha <.25, 1, 0)) %>% 
+  filter(badmatch != 1) %>% 
+  mutate(n_phas_matched2 = n()) %>% 
+  relocate(n_phas_matched2, .after = n_phas_matched)
+
+
+```
+
+
+
 
 
 
