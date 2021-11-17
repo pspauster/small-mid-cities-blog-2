@@ -42,8 +42,9 @@ library(getarc)
 library(fs)
 library(curl)
 library(readxl)
+library(sf)
 
-
+sf::sf_use_s2(FALSE)
 options(tigris_use_cache = TRUE)
 # Creating a color blind friendly palette using https://colorbrewer2.org/#type=diverging&scheme=BrBG&n=4
 city_size_pal <- c(
@@ -71,7 +72,7 @@ census_api_key = "2a8badf7045fdf93b91b5c21b184939b04cffb09"
 
 #### 5-Year American Community Survey (ACS) Data 2015-2019
 For this blog post we use the American Community Survey 5-year estimate data for 2015 to 2019. 
-```{r}
+```{r results='hide'}
 # Searching census codes
 v19 <- load_variables(2019, "acs5", cache = TRUE)
 
@@ -227,19 +228,26 @@ We will match city level data to PHA geographies from the HUD Estimated Housing 
 
 ```{r}
 
-pha_geo <- query_layer(endpoint = "https://services.arcgis.com/VTyQ9soqVukalItT/arcgis/rest/services/Proposed_Housing_Authority_Service_Areas/FeatureServer/0")
-
-
+pha_geo <- query_layer(endpoint = "https://services.arcgis.com/VTyQ9soqVukalItT/arcgis/rest/services/Proposed_Housing_Authority_Service_Areas/FeatureServer/0") %>% 
+  mutate(pha_level = factor(
+    case_when(
+    SUMLEV == "050" ~ "Regional",
+    SUMLEV == "040" ~ "State",
+    SUMLEV == "160" ~ "Local"
+  ),
+    levels = c("Local", "Regional", "State"))) %>% 
+  clean_names()
 ```
 
 
-
-## Get Picture of Subsidized Households Data
+### Get Picture of Subsidized Households Data
 
 We will match PHA and place level subsidized households data from HUD (https://www.huduser.gov/portal/datasets/assthsg.html#2009-2020_data) to describe housing assistance in each city
 
 
 ```{r}
+
+#before downloading, ensure you are in the correct working directory with getwd() and setwd()
 
 pic_year <- 2020
 
@@ -262,28 +270,102 @@ psh_places <- str_glue("PLACE_{pic_year}.xlsx") %>%
   read_xlsx()
 
 psh_phas <- str_glue("PHA_{pic_year}.xlsx") %>% 
-  read_excel()
+  read_excel() %>% 
+  rename(PARTICIPANT_CODE = code)
+
+```
+
+### Reshape PSH data
+
+Want one row per housing authority/place to facilitate matching
+```{r warning=FALSE}
+
+psh_phas_wide <- psh_phas %>% 
+  filter(program %in% c(1, 2, 3, 5)) %>% 
+  pivot_wider(id_cols = PARTICIPANT_CODE,
+              names_from = c(program, program_label),
+              names_prefix = "pha_",
+              values_from = c(          
+                 total_units,               pct_occupied,              number_reported,           pct_reported,              months_since_report,      
+                 pct_movein,                people_per_unit,           people_total,              rent_per_month,            spending_per_month,       
+                 hh_income,                 person_income,             pct_lt5k,                  pct_5k_lt10k,              pct_10k_lt15k,            
+                 pct_15k_lt20k,             pct_ge20k,                 pct_wage_major,            pct_welfare_major,         pct_other_major,          
+                 pct_median,                pct_lt50_median,           pct_lt30_median,           pct_2adults,               pct_1adult,               
+                 pct_female_head,           pct_female_head_child,     pct_disabled_lt62,         pct_disabled_ge62,         pct_disabled_all,         
+                 pct_lt24_head,             pct_age25_50,              pct_age51_61,              pct_age62plus,             pct_age85plus,            
+                 pct_minority,              pct_black_nonhsp,          pct_native_american_nonhsp,pct_asian_pacific_nonhsp,  pct_white_nothsp,         
+                 pct_black_hsp,             pct_wht_hsp,               pct_oth_hsp,               pct_hispanic,              pct_multi,                
+                 months_waiting,            months_from_movein,        pct_utility_allow,         ave_util_allow,            pct_bed1,                 
+                 pct_bed2,                  pct_bed3,                  pct_overhoused,            tpoverty,                  tminority,                
+                 tpct_ownsfd)
+                ) %>% 
+  clean_names()
+
+psh_places_wide <- psh_places %>% 
+    filter(program %in% c(1, 2, 3, 5)) %>% 
+    pivot_wider(id_cols = code,
+              names_from = c(program, program_label),
+              names_prefix = "place_",
+              values_from = c(          
+                 total_units,               pct_occupied,              number_reported,           pct_reported,              months_since_report,      
+                 pct_movein,                people_per_unit,           people_total,              rent_per_month,            spending_per_month,       
+                 hh_income,                 person_income,             pct_lt5k,                  pct_5k_lt10k,              pct_10k_lt15k,            
+                 pct_15k_lt20k,             pct_ge20k,                 pct_wage_major,            pct_welfare_major,         pct_other_major,          
+                 pct_median,                pct_lt50_median,           pct_lt30_median,           pct_2adults,               pct_1adult,               
+                 pct_female_head,           pct_female_head_child,     pct_disabled_lt62,         pct_disabled_ge62,         pct_disabled_all,         
+                 pct_lt24_head,             pct_age25_50,              pct_age51_61,              pct_age62plus,             pct_age85plus,            
+                 pct_minority,              pct_black_nonhsp,          pct_native_american_nonhsp,pct_asian_pacific_nonhsp,  pct_white_nothsp,         
+                 pct_black_hsp,             pct_wht_hsp,               pct_oth_hsp,               pct_hispanic,              pct_multi,                
+                 months_waiting,            months_from_movein,        pct_utility_allow,         ave_util_allow,            pct_bed1,                 
+                 pct_bed2,                  pct_bed3,                  pct_overhoused,            tpoverty,                  tminority,                
+                 tpct_ownsfd)
+                ) %>% 
+  clean_names() %>% 
+  rename(geoid = code)
 
 ```
 
 
-State-Level Public Housing Authorities:
+## Merge Data
+### Join PSH data PHA geos
 
-For the purposes of this dataset State-Level PHAs are identified through either their name, or their PHA Code also known as the Participant Code. Any PHA whose name contains the word “State”, or whose PHA Code begins with a ‘9’ (not including the two-character state code that begins the PHA code) is considered a State-Level PHA, and the service area therefore includes the entirety of that state.
+```{r}
 
- 
+psh_pha_geo <- left_join(psh_phas_wide, pha_geo, by = "participant_code") %>% 
+  st_as_sf() %>% 
+  st_make_valid()
 
-County-Level Public Housing Authorities:
+anti <- anti_join(psh_phas_wide, pha_geo, by = "participant_code") #two small HA don't have shapes -FL076 RIVIERA BEACH HOUSING AUTHORITY MA187 Berkshire County Regional Housing Authority The remainder are US territories, which are excluded from this analysis.
+```
 
-For the purposes of this dataset County-Level PHAs are identified as any PHA containing the word ‘County’ or ‘COUNTY’ in the organization’s formal name. The service area of a County-Level PHA includes the entire county after which the PHA is named, or the county which contains the majority of the units (combined low-rent and voucher) administered by the PHA. Moreover, a PHA that administers units located in jurisdictions outside the county for which the PHA is named, or the county which contains the majority of the units administered by the PHA, does not include those extraterritorial jurisdictions as part of its service area . Subsequently, the estimated service areas of housing authorities operating at a regional level, that is operating in multiple counties (contiguous or otherwise), are relegated to a single county. 
 
- 
+### Join Cities and PSH cities data
 
-Local-Level Public Housing Authorities:
+```{r}
+psh_places_geo <- left_join(census_2019, psh_places_wide, by = "geoid") %>% 
+  st_transform(st_crs(psh_pha_geo)) %>% 
+  st_make_valid()
 
-For the purposes of this dataset Local-Level PHAs are identified as any PHA that does not fall into the category of State-Level or County-Level Public Housing Authority as described above. The service area for a Local-Level PHA is first defined as the primary Unit of General Local Government (UGLG) served by the PHA. The primary local government jurisdiction is defined as the UGLG that contains the largest share of total units (combined low-rent and voucher) administered by that PHA. However, in cases where greater than 20% of units administered by that PHA are located outside of the primary local government jurisdiction served by the PHA, the PHA’s service area is defined as the entirety of the county that the primary local government is located in.
+test <- anti_join(census_2019, psh_places_wide, by = "geoid")
+# No PSH data for 6 cities
+# Macon-Bibb County, GA
+# Jurupa valley city, CA
+# Jurupa City Valley, GA
+# Brookhaven City, GA
+# Stonecrest City, GA
+# Collierville town, TN
 
-Please note, that the methods used to compile the estimated local PHA service areas illustrated in this dataset remain the same regardless of a state’s allowance for state-wide voucher portability.  
+```
+
+### Spatial join cities and PHAs
+
+```{r}
+
+phas_places_join <- st_intersection(psh_places_geo, psh_pha_geo)
+
+```
+
+
 
 
 #### 2000 Decenial Census data and principal city indicator
