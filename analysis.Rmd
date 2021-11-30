@@ -74,7 +74,7 @@ census_api_key = "2a8badf7045fdf93b91b5c21b184939b04cffb09"
 
 #### 5-Year American Community Survey (ACS) Data 2015-2019
 For this blog post we use the American Community Survey 5-year estimate data for 2015 to 2019. 
-```{r message=FALSE}
+```{r message=FALSE output=FALSE, warning=FALSE, echo= FALSE, results='hide'}
 # Searching census codes
 v19 <- load_variables(2019, "acs5", cache = TRUE)
 
@@ -383,11 +383,35 @@ all_cities_joined <- filter(phas_places_join, ! geoid %in% c("0464210", "0621230
     c(objectid,  stusab, formal_participant_name, pct_share,  sumlev, pha_level, n_phas_matched, overlap_area,
       percent_cover_city, percent_cover_pha, geometry),
     .before = pop_num) %>% 
-  mutate(badmatch = if_else(percent_cover_city <.25 & percent_cover_pha <.25, 1, 0)) %>% 
+  mutate(badmatch = if_else(percent_cover_city <.4 & percent_cover_pha <.4, 1, 0)) %>% 
   filter(badmatch != 1) %>% 
   mutate(n_phas_matched2 = n()) %>% 
   relocate(n_phas_matched2, .after = n_phas_matched)
+```
 
+``` {r}
+
+num_serving <- as.data.frame(all_cities_joined) %>% 
+  group_by(geoid, pha_level) %>% 
+  mutate(num_serving = n()) %>% 
+  select(geoid, NAME, pha_level, num_serving) %>% 
+  distinct() %>% 
+  pivot_wider(id_cols = c(geoid, NAME), names_from = pha_level, values_from = num_serving) %>% 
+  mutate(across(c(Regional, State, Local), ~replace_na(.x, 0)),
+    served_by = case_when(
+                          Local > 0 & Regional == 0 & State == 0 ~ "Local only",
+                          Local > 0 & Regional > 0 & State == 0 ~ "Local and regional",
+                          Local > 0 & Regional ==0 & State > 0 ~ "Local and state",
+                          Local > 0 & Regional > 0 & State > 0 ~ "Local, regional, and state",
+                          Local == 0 & Regional > 0 & State == 0 ~ "Regional only",
+                          Local == 0 & Regional > 0 & State > 0 ~ "Regional and state",
+                          Local == 0 & Regional == 0 & State > 0 ~ "State only",
+                          T ~ "Not served"
+    
+  )) %>% 
+  ungroup()
+  
+count(num_serving, served_by)
 
 ```
 
