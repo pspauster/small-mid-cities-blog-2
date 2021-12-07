@@ -43,6 +43,9 @@ library(fs)
 library(curl)
 library(readxl)
 library(sf)
+library(urbnthemes)
+
+set_urbn_defaults()
 
 sf::sf_use_s2(FALSE)
 options(tigris_use_cache = TRUE)
@@ -397,8 +400,13 @@ num_serving <- as.data.frame(all_cities_joined) %>%
   select(geoid, NAME, pha_level, num_serving) %>% 
   distinct() %>% 
   pivot_wider(id_cols = c(geoid, NAME), names_from = pha_level, values_from = num_serving) %>% 
+  left_join(select(small_mid_explore, geoid, NAME),
+            .,
+            by = "geoid") %>% 
   mutate(across(c(Regional, State, Local), ~replace_na(.x, 0)),
-    served_by = case_when(
+    served_by = 
+      factor(
+      case_when(
                           Local > 0 & Regional == 0 & State == 0 ~ "Local only",
                           Local > 0 & Regional > 0 & State == 0 ~ "Local and regional",
                           Local > 0 & Regional ==0 & State > 0 ~ "Local and state",
@@ -408,12 +416,123 @@ num_serving <- as.data.frame(all_cities_joined) %>%
                           Local == 0 & Regional == 0 & State > 0 ~ "State only",
                           T ~ "Not served"
     
-  )) %>% 
+  ),
+      levels = c("Local only", "Local and regional", "Regional only", "Local and state", "Regional and state", "State only","Local, regional, and state",
+                  "Not served"))) %>% 
   ungroup()
   
-count(num_serving, served_by)
 
 ```
+
+```{r}
+num_serving %>% 
+  count(served_by) %>% 
+  ggplot(mapping = aes(x=served_by, y = n))+
+    geom_col()+
+    geom_text(mapping = aes(label = n), vjust = -1) +
+    scale_y_continuous(expand = expand_scale(mult = c(0,0.1)))+
+    labs(x = "PHAs service combinations",
+         y = NULL,
+         title = "Number of Small and Mid Sized Cities served by PHA type",
+         caption = paste0("N=", nrow(num_serving), " small and mid sized cities"))+
+    remove_ticks() +
+    remove_axis()+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+```{r}
+num_serving %>% 
+  mutate(local_graph = if_else(served_by %in% c("Local only", "Local and regional", "Local and state", "Local, regional, and state"),
+                               as.character(served_by),
+                               "No local PHA")) %>% 
+  count(local_graph) %>% 
+  mutate(x = "",
+         local_graph = factor(local_graph, levels = c("No local PHA", "Local only", "Local and regional", "Local and state", "Local, regional, and state" )),
+         proportion = n/sum(n)) %>% 
+  ggplot(mapping = aes(x = x, y = proportion, fill = local_graph))+
+  geom_col(position = "fill")+
+  scale_fill_manual(values = c("#d2d2d2", "#a2d4ec", "#46abdb", "#1696d2", "#12719e", "#0a4c6a"))+
+  geom_text(aes(label = paste0(round(proportion*100, 0), "%")), position = position_stack(vjust = 0.5), color = "black")+
+  scale_y_continuous(expand = expand_scale(mult = c(0,0.1)), labels = scales::percent, limits = c(0, 1))+
+  labs(title = "Most small and mid sized cities don't have local Public Housing Authorities",
+       subtitle = "Percent of small and mid sized cities being served by PHA type",
+      x = NULL,
+       y = NULL,
+       caption = paste0("N=", nrow(num_serving), " small and mid sized cities")) +  
+  remove_ticks() +
+  guides(color = FALSE)
+
+#palette_urbn_main
+#palette_urbn_cyan
+```
+
+
+```{r}
+num_serving %>% 
+  mutate(regional_graph = if_else(served_by %in% c("Regional only", "Local and regional", "Regional and state", "Local, regional, and state"),
+                               as.character(served_by),
+                               "No regional PHA")) %>% 
+  count(regional_graph) %>% 
+  mutate(x = "",
+         regional_graph = factor(regional_graph, levels = c("No regional PHA", "Regional only", "Local and regional", "Regional and state", "Local, regional, and state" )),
+         proportion = n/sum(n)) %>% 
+  ggplot(mapping = aes(x = x, y = proportion, fill = regional_graph))+
+  geom_col(position = "fill")+
+  scale_fill_manual(values = c("#d2d2d2", "#a2d4ec", "#46abdb", "#1696d2", "#12719e", "#0a4c6a"))+
+  geom_text(aes(label = paste0(round(proportion*100, 0), "%")), position = position_stack(vjust = 0.5), color = "black")+
+  scale_y_continuous(expand = expand_scale(mult = c(0,0.1)), labels = scales::percent, limits = c(0, 1))+
+  labs(title = "Most small and mid sized cities have regional Public Housing Authorities",
+       subtitle = "Percent of small and mid sized cities being served by PHA type",x = NULL,
+       y = NULL,
+       caption = paste0("N=", nrow(num_serving), " small and mid sized cities")) +  
+  remove_ticks() +
+  guides(color = FALSE)
+
+
+
+
+
+```
+
+
+```{r}
+
+long_num_serving <- as.data.frame(all_cities_joined) %>% 
+  group_by(geoid, pha_level) %>% 
+  mutate(num_serving = n()) %>% 
+  select(geoid, NAME, pha_level, num_serving) %>% 
+  distinct() %>% 
+  left_join(., select(num_serving, geoid, served_by)) %>% 
+  group_by(served_by) %>% 
+  count(pha_level) %>% 
+  ungroup() %>% 
+  mutate(proportion = n/nrow(num_serving))
+  
+long_num_serving %>% 
+  ggplot(mapping = aes(x = pha_level, y = proportion, fill = served_by))+
+  geom_col()+
+  scale_fill_manual(values = palette_urbn_cyan)+
+  geom_text(aes(label = paste0(round(proportion*100, 0), "%")), position = position_stack(vjust = .75), color = "black")+
+  scale_y_continuous(expand = expand_scale(mult = c(0,0.1)), labels = scales::percent, limits = c(0, 1))+
+  labs(title = "Most small and mid sized cities are served by regional housing authorities",
+       subtitle = "Number of small and mid sized cities served by PHA type",x = NULL,
+       y = NULL,
+       caption = paste0("N=", nrow(num_serving), " small and mid sized cities")) +  
+  remove_ticks() +
+  guides(color = FALSE)
+
+
+
+
+
+```
+
+
+
+
+
+
 
 
 
