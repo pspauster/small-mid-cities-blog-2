@@ -307,8 +307,8 @@ psh_phas_wide <- psh_phas %>%
 
 psh_places_wide <- psh_places %>% 
     filter(program %in% c(1, 2, 3, 5)) %>% 
-    pivot_wider(id_cols = code,
-              names_from = c(program, program_label),
+    #mutate(row = row_number()) %>% 
+    pivot_wider(names_from = c(program, program_label),
               names_prefix = "place_",
               values_from = c(          
                  total_units,               pct_occupied,              number_reported,           pct_reported,              months_since_report,      
@@ -397,13 +397,14 @@ all_cities_joined <- filter(phas_places_join, ! geoid %in% c("0464210", "0621230
 num_serving <- as.data.frame(all_cities_joined) %>% 
   group_by(geoid, pha_level) %>% 
   mutate(num_serving = n()) %>% 
-  select(geoid, NAME, pha_level, num_serving) %>% 
+  select(geoid, NAME, pha_level, num_serving, size_type) %>% 
   distinct() %>% 
-  pivot_wider(id_cols = c(geoid, NAME), names_from = pha_level, values_from = num_serving) %>% 
-  left_join(select(small_mid_explore, geoid, NAME),
-            .,
-            by = "geoid") %>% 
+  pivot_wider(id_cols = c(geoid, NAME, size_type), names_from = pha_level, values_from = num_serving) %>% 
+  # left_join(select(small_mid_explore, geoid, NAME),
+  #           .,
+  #           by = "geoid") %>% 
   mutate(across(c(Regional, State, Local), ~replace_na(.x, 0)),
+         size_type = factor(size_type, levels = c("small (50-100k)", "small-mid (100-150k)",  "mid (150-500k)", "large (500k +)")),
     served_by = 
       factor(
       case_when(
@@ -426,6 +427,7 @@ num_serving <- as.data.frame(all_cities_joined) %>%
 
 ```{r}
 num_serving %>% 
+  filter(size_type != "large (500k +)") %>% 
   count(served_by) %>% 
   ggplot(mapping = aes(x=served_by, y = n))+
     geom_col()+
@@ -434,7 +436,7 @@ num_serving %>%
     labs(x = "PHAs service combinations",
          y = NULL,
          title = "Number of Small and Mid Sized Cities served by PHA type",
-         caption = paste0("N=", nrow(num_serving), " small and mid sized cities"))+
+         caption = paste0("N=", nrow(num_serving %>% filter(size_type != "large (500k +)")), " small and mid sized cities"))+
     remove_ticks() +
     remove_axis()+
     theme(axis.text.x = element_text(angle = 45, hjust = 1))
@@ -446,20 +448,21 @@ num_serving %>%
   mutate(local_graph = if_else(served_by %in% c("Local only", "Local and regional", "Local and state", "Local, regional, and state"),
                                as.character(served_by),
                                "No local PHA")) %>% 
+  group_by(size_type) %>% 
   count(local_graph) %>% 
-  mutate(x = "",
+  mutate(
          local_graph = factor(local_graph, levels = c("No local PHA", "Local only", "Local and regional", "Local and state", "Local, regional, and state" )),
          proportion = n/sum(n)) %>% 
-  ggplot(mapping = aes(x = x, y = proportion, fill = local_graph))+
+  ggplot(mapping = aes(x = size_type, y = proportion, fill = local_graph))+
   geom_col(position = "fill")+
   scale_fill_manual(values = c("#d2d2d2", "#a2d4ec", "#46abdb", "#1696d2", "#12719e", "#0a4c6a"))+
   geom_text(aes(label = paste0(round(proportion*100, 0), "%")), position = position_stack(vjust = 0.5), color = "black")+
   scale_y_continuous(expand = expand_scale(mult = c(0,0.1)), labels = scales::percent, limits = c(0, 1))+
-  labs(title = "Most small and mid sized cities don't have local Public Housing Authorities",
+  labs(title = "Most small and mid sized cities often don't have local Public Housing Authorities",
        subtitle = "Percent of small and mid sized cities being served by PHA type",
       x = NULL,
        y = NULL,
-       caption = paste0("N=", nrow(num_serving), " small and mid sized cities")) +  
+       caption = paste0("N=", nrow(num_serving), " cities")) +  
   remove_ticks() +
   guides(color = FALSE)
 
@@ -473,11 +476,12 @@ num_serving %>%
   mutate(regional_graph = if_else(served_by %in% c("Regional only", "Local and regional", "Regional and state", "Local, regional, and state"),
                                as.character(served_by),
                                "No regional PHA")) %>% 
+  group_by(size_type) %>% 
   count(regional_graph) %>% 
-  mutate(x = "",
+  mutate(
          regional_graph = factor(regional_graph, levels = c("No regional PHA", "Regional only", "Local and regional", "Regional and state", "Local, regional, and state" )),
          proportion = n/sum(n)) %>% 
-  ggplot(mapping = aes(x = x, y = proportion, fill = regional_graph))+
+  ggplot(mapping = aes(x = size_type, y = proportion, fill = regional_graph))+
   geom_col(position = "fill")+
   scale_fill_manual(values = c("#d2d2d2", "#a2d4ec", "#46abdb", "#1696d2", "#12719e", "#0a4c6a"))+
   geom_text(aes(label = paste0(round(proportion*100, 0), "%")), position = position_stack(vjust = 0.5), color = "black")+
@@ -485,7 +489,7 @@ num_serving %>%
   labs(title = "Most small and mid sized cities have regional Public Housing Authorities",
        subtitle = "Percent of small and mid sized cities being served by PHA type",x = NULL,
        y = NULL,
-       caption = paste0("N=", nrow(num_serving), " small and mid sized cities")) +  
+       caption = paste0("N=", nrow(num_serving), " cities")) +  
   remove_ticks() +
   guides(color = FALSE)
 
@@ -495,10 +499,36 @@ num_serving %>%
 
 ```
 
+```{r}
+num_serving %>% 
+  mutate(state_graph = if_else(served_by %in% c("State only", "Local and state", "Regional and state", "Local, regional, and state"),
+                               as.character(served_by),
+                               "No state PHA")) %>% 
+  group_by(size_type) %>% 
+  count(state_graph) %>% 
+  mutate(
+         state_graph = factor(state_graph, levels = c("No state PHA", "State only", "Local and state", "Regional and state", "Local, regional, and state" )),
+         proportion = n/sum(n)) %>% 
+  ggplot(mapping = aes(x = size_type, y = proportion, fill = state_graph))+
+  geom_col(position = "fill")+
+  scale_fill_manual(values = c("#d2d2d2", "#a2d4ec", "#46abdb", "#1696d2", "#12719e", "#0a4c6a"))+
+  geom_text(aes(label = paste0(round(proportion*100, 0), "%")), position = position_stack(vjust = 0.5), color = "black")+
+  scale_y_continuous(expand = expand_scale(mult = c(0,0.1)), labels = scales::percent, limits = c(0, 1))+
+  labs(title = "Most small and mid sized cities have state Public Housing Authorities",
+       subtitle = "Percent of small and mid sized cities being served by PHA type",x = NULL,
+       y = NULL,
+       caption = paste0("N=", nrow(num_serving), " cities")) +  
+  remove_ticks() +
+  guides(color = FALSE)
+```
+
+
+
 
 ```{r}
 
 long_num_serving <- as.data.frame(all_cities_joined) %>% 
+  filter(size_type != "large (500k +)") %>% 
   group_by(geoid, pha_level) %>% 
   mutate(num_serving = n()) %>% 
   select(geoid, NAME, pha_level, num_serving) %>% 
@@ -516,9 +546,9 @@ long_num_serving %>%
   geom_text(aes(label = paste0(round(proportion*100, 0), "%")), position = position_stack(vjust = .75), color = "black")+
   scale_y_continuous(expand = expand_scale(mult = c(0,0.1)), labels = scales::percent, limits = c(0, 1))+
   labs(title = "Most small and mid sized cities are served by regional housing authorities",
-       subtitle = "Number of small and mid sized cities served by PHA type",x = NULL,
+       subtitle = "Percentage of small and mid sized cities served by PHA type",x = NULL,
        y = NULL,
-       caption = paste0("N=", nrow(num_serving), " small and mid sized cities")) +  
+       caption = paste0("N=", nrow(num_serving %>% filter(size_type != "large (500k +)")), " small and mid sized cities")) +  
   remove_ticks() +
   guides(color = FALSE)
 
@@ -528,10 +558,213 @@ long_num_serving %>%
 
 ```
 
+##PSH place-level analysis
+
+Mix of households served
+-PBV
+-HCV
+-PBS8
+-PH
+
+Comparison to large cities!
+
+```{r}
+
+census_psh_places <- 
+  left_join(census_2019, psh_places_wide, by = "geoid") %>% 
+  filter( ! geoid %in% c("0464210", "0621230", "0637692", "0646842", "0812815", "1200410", "1245060", "1310944", "1319000", "1342425", "1349008", "1372122", "1373784", "1571550", "2148006", "2578972", "2483775", "5103320", "5367167", "1271625", "7276770", "7206593", "7214290", "7263820", "7210334", "7232522", "7252431" ))%>% 
+  as.data.frame()
+
+```
+
+```{r}
+
+mix_hh_served <- census_psh_places %>% 
+  select(geoid, NAME, total_units, total_units_place_1_summary_of_all_hud_programs, total_units_place_2_public_housing, total_units_place_3_housing_choice_vouchers, total_units_place_5_project_based_section_8, size_type) %>% 
+  mutate(share_sub_units = total_units_place_1_summary_of_all_hud_programs/total_units,
+         share_sub_cat = factor(
+           case_when(
+             share_sub_units < .01 ~ "Less than 1 percent",
+             share_sub_units >= .01 & share_sub_units <.03 ~ "1 to 3 percent",
+             share_sub_units >= .03 & share_sub_units <.05 ~ "3 to 5 percent",
+             share_sub_units >= .05 & share_sub_units <.07 ~ "5 to 7 percent",
+              share_sub_units >= .07 & share_sub_units <.09 ~ "7 to 9 percent",
+             share_sub_units >= .09 ~ "9 percent or more",
+         ),
+         levels = c("Less than 1 percent",
+              "1 to 3 percent",
+              "3 to 5 percent",
+              "5 to 7 percent",
+               "7 to 9 percent",
+              "9 percent or more"))
+         )
+
+```
+
+```{r}
+mix_hh_served %>% 
+  filter(!is.na(share_sub_cat), size_type != "large (500k +)") %>% 
+  #group_by(size_type) %>% 
+  count(share_sub_cat) %>% 
+ggplot()+
+  geom_col(mapping = aes(x = share_sub_cat, y = n))+
+  labs(title = "Share of subsidized housing in small and mid sized cities",
+       subtitle = "Subsidized units as a percentage of total units",
+       y = "Number of cities",
+       x = "Percent subsidized",
+       caption = paste0("N=", nrow(num_serving %>% filter(size_type != "large (500k +)")), " small and mid sized cities"))
+```
+```{r}
+
+mix_hh_served %>% 
+  pivot_longer(starts_with("total_units"), names_to = "program", values_to = "units") %>% 
+  group_by(geoid, size_type) %>% 
+  mutate(total_sub_units = max(units, na.rm = TRUE)) %>% 
+  #filter(program != "total_units_place_1_summary_of_all_hud_programs") %>% 
+  ungroup() %>%
+  group_by(program) %>% 
+  summarize(`Units` = sum(units, na.rm = TRUE))
+            
+
+```
+
+```{r}
+
+mix_hh_served %>% 
+  pivot_longer(starts_with("total_units"), names_to = "program", values_to = "units") %>% 
+  filter(! program %in% c("total_units_place_1_summary_of_all_hud_programs", "total_units")) %>% 
+  mutate(program = case_when(
+    program == "total_units_place_2_public_housing" ~ "Public housing",
+    program == "total_units_place_3_housing_choice_vouchers" ~ "Housing choice vouchers",
+    program == "total_units_place_5_project_based_section_8" ~ "Project based section 8"
+  )) %>% 
+  group_by(size_type, program) %>% 
+  summarize(units = sum(units, na.rm = TRUE)) %>% 
+  mutate(size_type = factor(size_type, levels = c("small (50-100k)", "small-mid (100-150k)",  "mid (150-500k)", "large (500k +)"))) %>% 
+  ggplot()+
+  geom_col(mapping = aes(x = size_type, y = units, fill = program), position = "fill") +
+  scale_y_continuous(expand = expand_scale(mult = c(0, 0.1)), labels = scales::percent) +
+  labs(title = "Larger cities have slightly higher shares of public housing than small and mid-sized cities",
+       subtitle = "Share of subsidized units by program",
+        x = NULL,
+       y = NULL) +  
+  remove_ticks() +
+  guides(color = FALSE)
+
+
+```
+
+
+Total households served
+-PBV
+-HCV
+-PBS8
+-PH
+
+```{r}
+mix_hh_served %>% 
+  group_by(size_type) %>% 
+  summarize(sum = sum(total_units_place_1_summary_of_all_hud_programs, na.rm = TRUE)) %>% 
+  arrange(desc(size_type)) %>%
+  mutate(
+         ypos = cumsum(sum)-.5*sum) %>% 
+  ggplot()+
+  geom_bar(aes(x="", y=sum, fill = size_type), stat="identity", width = 1)+
+  coord_polar("y", start = 0)+
+  geom_text(aes(x = "", y = ypos, label = sum, color = size_type))+
+  scale_color_manual(values = c("black", "black", "white", "black"))+
+  remove_ticks() +
+  remove_axis() +
+    labs(title = "Most urban subsidized housing is found in small and mid-sized cities",
+       subtitle = "Share of subsidized units by program",
+        x = NULL,
+       y = NULL)+
+  guides(color = FALSE,
+         label = FALSE)+
+  theme_void()+
+  theme(legend.title = element_blank())
+
+  
+  
+  
+```
+```{r}
+mix_hh_served %>% 
+  #pivot_longer(starts_with("total_units_"), names_to = "program", values_to = "units") %>% 
+  #filter(! program %in% c("total_units_place_1_summary_of_all_hud_programs", "total_units")) %>% 
+  # mutate(program = case_when(
+  #   program == "total_units_place_2_public_housing" ~ "Public housing",
+  #   program == "total_units_place_3_housing_choice_vouchers" ~ "Housing choice vouchers",
+  #   program == "total_units_place_5_project_based_section_8" ~ "Project based section 8"
+  # )) %>% 
+  group_by(size_type) %>% 
+  summarize(units_share = sum(total_units_place_1_summary_of_all_hud_programs, na.rm = TRUE)/sum(total_units, na.rm = TRUE)) %>% 
+  mutate(size_type = factor(size_type, levels = c("small (50-100k)", "small-mid (100-150k)",  "mid (150-500k)", "large (500k +)"))) %>% 
+  ggplot()+
+  geom_col(mapping = aes(x = size_type, y = units_share)) +
+  scale_y_continuous(expand = expand_scale(mult = c(0, 0.1)), labels = scales::percent) +
+  labs(title = "Larger cities have slightly higher shares of subsidized units than small and mid-sized cities",
+       subtitle = "Share of subsidized units by city size",
+        x = NULL,
+       y = NULL) +  
+  remove_ticks() +
+  guides(color = FALSE)
+
+```
+
+
+Comparison to large cities!
+
+Race/Ethnicity of HH served
+Comparison to large cities!
+```{r}
+race_places <- census_psh_places %>% 
+  select(geoid, size_type, NAME, pct_white_nothsp_place_1_summary_of_all_hud_programs, pct_asian_pacific_nonhsp_place_1_summary_of_all_hud_programs, pct_black_nonhsp_place_1_summary_of_all_hud_programs, pct_native_american_nonhsp_place_1_summary_of_all_hud_programs,  pct_hispanic_place_1_summary_of_all_hud_programs, pct_multi_place_1_summary_of_all_hud_programs, number_reported_place_1_summary_of_all_hud_programs) %>% 
+  mutate(across(starts_with("pct_"), ~ifelse(.x %in% c(-1, -4, -5), NA, .x)),
+         across(starts_with("pct"), ~.x*number_reported_place_1_summary_of_all_hud_programs)
+         ) %>% 
+  pivot_longer(starts_with("pct_"), names_to = "race_eth", values_to = "value") %>% 
+  mutate(race_eth = case_when(
+    str_detect(race_eth, "black") ~ "Black",
+    str_detect(race_eth, "white") ~ "White",
+    str_detect(race_eth, "native") ~ "Native American",
+    str_detect(race_eth, "asian") ~ "Asian/Pacific Islander",
+    str_detect(race_eth, "hispanic") ~ "Hispanic",
+    str_detect(race_eth, "multi") ~ "Two or more races"
+  ))
+
+race_places %>% 
+  group_by(size_type, race_eth) %>% 
+  summarize(count = sum(value, na.rm = TRUE)) %>% 
+  mutate(size_type = factor(size_type, levels = c("small (50-100k)", "small-mid (100-150k)",  "mid (150-500k)", "large (500k +)"))) %>% 
+  ggplot()+
+  geom_col(mapping = aes(x = size_type, y = count, fill = race_eth), position = "fill") +
+  scale_y_continuous(expand = expand_scale(mult = c(0, 0.1)), labels = scales::percent) +
+  labs(title = "Small and mid-sized cities subsidized households are whiter than large cities",
+       subtitle = "Share of subsidized units by race and ethnicity",
+        x = NULL,
+       y = NULL) +  
+  remove_ticks() +
+  guides(color = FALSE)
+
+```
+
+
+Income of HH served
+Comparison to large cities!
 
 
 
+Work-able status of HH served
+Comparison to large cities!
 
+
+Household comp of HH served
+Comparison to large cities!
+
+
+Neighborhood poverty rate
+Comparison to large cities!
 
 
 
