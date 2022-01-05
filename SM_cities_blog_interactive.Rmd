@@ -1,0 +1,1058 @@
+---
+title: "A Class of Their Own: Housing Characteristics of Small and Mid-Size Cities"
+subtitle: "NYU Furman Center"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    code_folding: show
+---
+
+The analysis presented here appears in the blog post [_Housing Characteristics of Small and Mid-Sized Cities
+_](https://furmancenter.org/thestoop/entry/housing-characteristics-of-small-and-mid-sized-cities)
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  out.width = "100%",
+  fig.height = 7
+)
+```
+
+
+#### Add libraries and formats
+```{r load-packages-set-options}
+library(tidyverse) # general data manipulation and graphing
+library(reshape2)
+library(lubridate) # format dates
+library(scales) # number formatting
+library(janitor) # data cleaning
+library(hrbrthemes)
+library(gt) # formatting tables
+library(tidycensus) # pulling in census data
+library(jsonlite)
+library(ggplot2) # making graphs
+library(acssf)
+library(ggrepel)
+library(leaflet) #Creates maps
+library(tigris) #Pull Census shapefiles
+library(leafpop)# (confirm we need this)
+library(plotly)# interactive ggplot for mouseover
+library(leaflet.extras)
+library(leaflegend)
+
+
+# Creating a color blind friendly palette using https://colorbrewer2.org/#type=diverging&scheme=BrBG&n=4
+city_size_pal <- c(
+  "#a6611a",
+  "#dfc27d",
+  "#018571",
+  "#80cdc1"
+)
+
+```
+
+## Defining External Variables
+We utilize Bureau of Labor Statistics' Consumer Price Index (CPI) factor to normalize rents between 2000 and 2019. To access 2000 Decennial data, we use the US Census Bureau's API, which requires an access key.
+```{r}
+### CPI (Consumer Price Index) to adjust for inflation between 2000 and 2019
+#Add inflation factor: 2000 rents in 2019 dollars (source: https://www.bls.gov/data/inflation_calculator.htm)
+CPI <- 1.49118 # Change the CPI to represent the studied years using the bls inflation calculator. 
+
+### Census API Key
+# Input your census API key below to access the census data. You can sign-up for a key here:https://api.census.gov/data/key_signup.html
+census_api_key = "c32dfbf7d25fe9558fd11bf021780457970f96ff"
+
+```
+
+
+## Data Pull
+
+
+#### 5-Year American Community Survey (ACS) Data 2015-2019
+For this blog post we use the American Community Survey 5-year estimate data for 2015 to 2019. 
+```{r}
+# Searching census codes
+v19 <- load_variables(2019, "acs5", cache = TRUE)
+
+# Pull in census variables
+census_2019 <- get_acs(
+  geography = "place",
+  year = 2019,
+  survey = "acs5",
+  output = "wide",
+  geometry = FALSE,
+  moe_sum = FALSE,
+  variables = c(
+    "B01003_001E", # pop_num,
+    "B03002_006E", # pop_race_asian_num
+    "B03002_004E", # pop_race_black_num
+    "B03002_012E", # pop_race_hisp_num
+    "B03002_003E", # pop_race_white_num
+    acs_vars("B01001_{c(3:6, 27:30)*}E"), # pop_u18_num
+    acs_vars("B01001_{c(20:25, 44:49)*}E"), # pop_65p_num
+    acs_vars("B01001_{c(7:19, 31:43)*}E"),
+    "B17001_002E", # pop_pov_num
+    "B25002_002E", # unit_occ_num
+    "B25003_002E", # unit_occ_own_num
+    "B25003_003E", # unit_occ_rent_num
+    "B25063_002E", # unit_rent_cash_num
+    acs_vars("B25070_{7:10*}E"), # rent_burden_num
+    "B25002_001E", # unit_num
+    "B25002_003E", # unit_vac_num
+    "B25064_001E", # rent_gross_med
+    "B25119_001E", # hh_inc_med
+    "B25070_010E", # rent_burden_sev_num
+    "B19025_001E", # aggregate_hh_income
+    "B17001_001E", # pop_pov_denom_num
+    "B19025_001E", # aggregate_hh_income_est
+    "B19001_001E", # hh_income_count_est summary variable
+    "B25024_001E", # total_units
+    "B25024_002E", # total_1_det
+    "B25024_003E", # total_1_att
+    "B25032_013E", # 	total_units_rent
+    "B25032_014", # units_rent_1_det
+    "B25032_015E", # units_rent_1_att
+    "B25106_025E", # count_less20K_est
+    "B25106_028E", # cost_burden_less20K_est
+    "B25106_029E", # count_20K34k_est
+    "B25106_032E", # cost_burden_20K34k_est
+    "B25106_033E", # count_35K49k_est
+    "B25106_036E", # cost_burden_35K49k_est
+    "B25106_037E", # count_50K74k_est
+    "B25106_040E", # cost_burden_50K74k_est
+    "B25106_041E", # count_more75k_est
+    "B25106_044E", # cost_burden_more75k_est
+    "B25003H_002E", # homeowner_nonHisp_white_est
+    "B25003H_001E", # count_nonHisp_white_est
+    "B25003B_002E", # homeowner_Black_est
+    "B25003B_001E", # count_Black_est
+    "B25003D_002E", # homeowner_Asian_est
+    "B25003D_001E", # count_Asian_est
+    "B25003I_002E", # homeowner_Latino_est
+    "B25003I_001E" # count_Latino_est
+  )
+) %>%
+  mutate(
+    "pop_u18_num" = acs_est_sum("B01001_{c(3:6, 27:30)*}E"),
+    "pop_65p_num" = acs_est_sum("B01001_{c(20:25, 44:49)*}E"),
+    "pop_18_64_num" = acs_est_sum("B01001_{c(7:19, 31:43)*}E"),
+    "rent_burden_num" = acs_est_sum("B25070_{7:10*}E")
+  )
+# Assign places to city size categories for the analysis
+census_2019 <- census_2019 %>%
+  mutate(size_type = case_when(
+    B01003_001E >= 50000 & B01003_001E < 100000 ~ "small (50-100k)",
+    B01003_001E >= 100000 & B01003_001E < 150000 ~ "small-mid (100-150k)",
+    B01003_001E >= 150000 & B01003_001E < 500000 ~ "mid (150-500k)",
+    B01003_001E >= 500000 ~ "large (500k +)"
+  )) %>%
+  filter(!is.na(size_type))
+
+# Select variables needed for the analysis below
+census_2019 <- census_2019 %>%
+  select(
+    geoid = "GEOID",
+    NAME,
+    pop_num =  "B01003_001E", 
+    pop_race_asian_num = "B03002_006E", 
+    pop_race_black_num = "B03002_004E", 
+    pop_race_hisp_num = "B03002_012E", 
+    pop_race_white_num  = "B03002_003E", 
+    pop_pov_num = "B17001_002E", 
+    unit_occ_num = "B25002_002E", 
+    unit_occ_own_num = "B25003_002E", 
+    unit_occ_rent_num = "B25003_003E", 
+    unit_rent_cash_num = "B25063_002E", 
+    unit_num = "B25002_001E", 
+    unit_vac_num = "B25002_003E", 
+    hh_inc_med = "B25119_001E", 
+    rent_burden_sev_num = "B25070_010E", 
+    pop_pov_denom_num = "B17001_001E", 
+    rent_gross_med = "B25064_001E", 
+    aggregate_hh_income_est = "B19025_001E", 
+    hh_income_count_est = "B19001_001E", 
+    "pop_u18_num", 
+    "pop_65p_num", 
+    "pop_18_64_num", 
+    "rent_burden_num", 
+    total_units = "B25024_001E", 
+    total_1_det = "B25024_002E", 
+    total_1_att = "B25024_003E", 
+    total_units_rent = "B25032_013E", 
+    units_rent_1_det = "B25032_014E", 
+    units_rent_1_att = "B25032_015E", 
+    count_less20K_est = "B25106_025E", 
+    cost_burden_less20K_est = "B25106_028E", 
+    count_20K34k_est = "B25106_029E", 
+    cost_burden_20K34k_est = "B25106_032E", 
+    count_35K49k_est = "B25106_033E", 
+    cost_burden_35K49k_est = "B25106_036E", 
+    count_50K74k_est = "B25106_037E", 
+    cost_burden_50K74k_est = "B25106_040E",
+    count_more75k_est = "B25106_041E",
+    cost_burden_more75k_est = "B25106_044E", 
+    homeowner_nonHisp_white_est = "B25003H_002E", 
+    count_nonHisp_white_est = "B25003H_001E", 
+    homeowner_Black_est = "B25003B_002E", 
+    count_Black_est = "B25003B_001E", 
+    homeowner_Asian_est = "B25003D_002E", 
+    count_Asian_est = "B25003D_001E", 
+    homeowner_Latino_est = "B25003I_002E", 
+    count_Latino_est = "B25003I_001E", 
+    "size_type"
+  )
+
+# Save as a data frame
+small_mid_explore <- data.frame(census_2019)
+```
+
+
+## Exclude Cities
+In this analysis, we drop cities that are outside of the 50-states and DC (e.g., in the US Territories). We also exclude cities that are newly established since the 2000 Census and those that merged with their county jurisdiction to form a unified government during that period as well, so that we have a consistent sample of cities for the analysis. 
+
+```{r}
+# Dropping cities that were not included in the 2000 census, cities outside the 50-states, and those that merged with their county jurisdiction to form a unified government over the period.
+small_mid_explore <- filter(small_mid_explore, ! geoid %in% c("0464210", "0621230", "0637692", "0646842", "0812815", "1200410", "1245060", "1310944", "1319000", "1342425", "1349008", "1372122", "1373784", "1571550", "2148006", "2578972", "2483775", "5103320", "5367167", "1271625", "7276770", "7206593", "7214290", "7263820", "7210334", "7232522", "7252431" ))
+```
+
+
+## Wrangling Data
+
+
+#### 2000 Decenial Census data and principal city indicator
+We pull in the 2000 5-Year American Community Survey Decennial Census Data to see how city trends have changed between 2000 and 2019. 
+```{r}
+#Pull in the 2000 Decennial Census city population data
+decennial_pop_num_cities <-
+  fromJSON(paste0(
+    "https://api.census.gov/data/2000/dec/sf1?get=P001001,NAME&for=place:*&key=", census_api_key)
+  ) %>%
+  as_tibble() %>%
+  transmute(
+    pop_num_2000 = V1,
+    geo_name = V2,
+    geoid = str_glue("{V3}{V4}")
+  ) %>%
+  filter(pop_num_2000 != "P001001")
+
+# Joining the Decennial census data
+small_mid_city_pop_comparison <- small_mid_explore %>%
+  left_join(decennial_pop_num_cities, by = "geoid") %>%
+  mutate(pop_num_2000 = as.numeric(pop_num_2000))
+
+# Define placed as "principal city"  as "Principal" and those excluded as "suburbs". More on the Census designations here: https://www.census.gov/programs-surveys/metro-micro/about.html#:~:text=The%20largest%20city%20in%20each,concerning%20population%20size%20and%20employment.
+
+principal_cities <- read_csv("metro_micro_principal_cities_2018_census.csv", n_max = 1268) %>%
+  mutate(principal_city = TRUE)%>%
+  mutate(
+    format_zeros= str_pad(geoid, width = 7, side = "left", pad = "0") # Address leading zeros issue
+  )%>%
+  select(format_zeros, principal_city) %>%
+  rename(geoid = format_zeros) 
+
+# Join data, and create principal and suburbs flag
+small_mid_city_pop_comparison <- small_mid_city_pop_comparison %>%
+    left_join(principal_cities, by = "geoid")%>%
+  mutate(place_type = case_when(
+    principal_city == TRUE ~ "Principal",
+    is.na(principal_city) ~ "Suburbs"
+  )) %>%
+  mutate(place_type_flag = case_when(
+    principal_city == TRUE ~ 1,
+    is.na(principal_city) ~ 0
+  ))
+```
+
+
+## Summary Statsitics Table
+
+
+#### Create weighted median income and rent figures
+With the exception of the median household income and gross rent figures, the following descriptive statistics were calculated by aggregating Census place estimates by city size categories and then calculating mean or percentages for the full population living in those cities. For the household income and gross rent figures, Census reporting standards limit the ability to recalculate median estimates for aggregated geographies. Rather than produce mean estimates for these variables, which are susceptible to outliers skewing the results, the household income and gross rent estimates are presented as median estimates weighted by the total number of households in a city and the total households with cash rent in a city, respectively.
+
+```{r}
+# Create Weighted aggregated median figures
+small_mid_city_pop_comparison <- small_mid_city_pop_comparison %>% 
+  mutate(
+    agg_med_rent = rent_gross_med * unit_rent_cash_num,# Weighted aggregated median rent
+    agg_med_hh_income = hh_inc_med * hh_income_count_est # weighted aggregated median household income
+  )
+
+```
+
+
+
+#### Crate dataframe for Table 1
+```{r}
+# Descriptive stats tables With demographic and housing information
+cities_size_stats <-
+  small_mid_city_pop_comparison %>%
+  group_by(size_type) %>%
+  summarise(
+    total_population = sum(pop_num),
+    n = n(),
+    place_type_flag = mean(place_type_flag),
+    pop_race_asian_num = sum(pop_race_asian_num),
+    pop_race_black_num = sum(pop_race_black_num),
+    pop_race_hisp_num = sum(pop_race_hisp_num),
+    pop_race_white_num = sum(pop_race_white_num),
+    pop_u18_num = sum(pop_u18_num),
+    pop_18_64_num = sum(pop_18_64_num),
+    pop_65p_num = sum(pop_65p_num),
+    pop_pov_num = sum(pop_pov_num),
+    pop_pov_denom_num = sum(pop_pov_denom_num),
+    unit_occ_num = sum(unit_occ_num),
+    unit_occ_own_num = sum(unit_occ_own_num),
+    unit_occ_rent_num = sum(unit_occ_rent_num),
+    unit_rent_cash_num = sum(unit_rent_cash_num),
+    rent_burden_num = sum(rent_burden_num),
+    unit_num = sum(unit_num),
+    unit_vac_num = sum(unit_vac_num),
+    rent_gross_den = sum(unit_rent_cash_num),
+    hh_inc_den = sum(hh_income_count_est),
+    rent_burden_sev_num = sum(rent_burden_sev_num),
+    agg_med_rent = sum(agg_med_rent),
+    agg_med_hh_income = sum(agg_med_hh_income),
+    total_units = sum(total_units),
+    total_1_det = sum(total_1_det),
+    total_1_att = sum(total_1_att),
+    total_units_rent = sum(total_units_rent),
+    units_rent_1_det = sum(units_rent_1_det),
+    units_rent_1_att = sum(units_rent_1_att),
+  ) %>%
+  ungroup()%>%
+  transmute(
+    size_type,
+    n,
+    total_population,
+    place_type_flag,
+    share_asian = pop_race_asian_num/total_population, # Share Asian
+    share_black = pop_race_black_num / total_population, # Share Black
+    share_hisp = pop_race_hisp_num / total_population, # Share Hispanic
+    share_white = pop_race_white_num / total_population, # Share white
+    share_u18 = pop_u18_num / total_population,# Share under 18
+    share_over_65 = pop_65p_num / total_population,# Share over 65
+    share_poverty = pop_pov_num / pop_pov_denom_num, # Share Poverty
+    wgt_med_hh_income = agg_med_hh_income / hh_inc_den, # Weighted median household income
+    share_owner_occ = unit_occ_own_num / unit_occ_num, # Share Owner-Occupied
+    share_renter_occ = unit_occ_rent_num / unit_occ_num, # Share Renter Occupied
+    share_vacancy = unit_vac_num / unit_num, # Vacancy rate
+    share_rent_burden = rent_burden_num / unit_rent_cash_num, # Share Rent burdened
+    share_sev_rent_burden = rent_burden_sev_num / unit_rent_cash_num, # Share Severely Rent burdened
+    share_total_1_det_att = (total_1_det+total_1_att)/total_units,# share 1 unit detached and attached
+    share_rent_1_det_att = (units_rent_1_det+units_rent_1_att)/total_units_rent, # share 1 unit rental detached and attached
+    wgt_med_gross_rent = agg_med_rent / rent_gross_den# Weighted median gross rent
+  )
+```
+
+
+
+#### Table 1: Select Population and Housing Characteristics by City Size Categories, 2019 (Summary Statistics table)
+```{r}
+table_1 <- cities_size_stats %>%
+  pivot_longer(-size_type, names_to = "var", values_to = "val") %>%
+  pivot_wider(names_from = size_type, values_from = val) %>%
+  mutate(
+    var_group = case_when(
+      var %in% c("n", "total_population", "place_type_flag") ~ "Basic Stats",
+      str_detect(var, "share_(asian|black|hisp|white)") ~ "Racial/Ethnic Composition",
+      # Add variables
+      var %in% c("share_u18", "share_over_65", "share_poverty", "wgt_med_hh_income") ~ "Age and Income",
+      var %in% c("share_owner_occ", "share_renter_occ", "share_vacancy", "share_rent_burden", "share_sev_rent_burden", "share_total_1_det_att", "share_rent_1_det_att", "wgt_med_gross_rent") ~ "Housing Characteristics",
+    ),
+    var = recode(
+      var,
+      "n" = "Number of Cities",
+      "total_population" = "Total Population",
+      "place_type_flag" = "Prinicpal City (%)",
+      "share_asian" = "Asian (%)",
+      "share_black" = "Black (%)",
+      "share_hisp" = "Hispanic (%)",
+      "share_white" = "White (%)",
+      "share_u18" = "Under 18 Years (%)",
+      "share_over_65" = "65 Years or Older (%)",
+      "share_poverty" = "Poverty (%)",
+      "wgt_med_hh_income" = "Weighted Median Household Income ($)",
+      "share_owner_occ" = "Owner-Occupied (%)",
+      "share_renter_occ" = "Renter-Occupied (%)",
+      "share_vacancy" = "Vacancy (%)",
+      "share_rent_burden" = "Rent Burdened (%)",
+      "share_sev_rent_burden" = "Severely Rent Burdened (%)",
+      "share_total_1_det_att" = "Single-Family (1-Unit) Residence (%)",
+      "share_rent_1_det_att" = "Single-Family (1-Unit) Rental (%)",
+      "wgt_med_gross_rent" = "Weighted Median Gross Rent ($)",
+    )
+  ) %>%
+  select(
+    var, var_group,
+    `small (50-100k)`, `small-mid (100-150k)`, `mid (150-500k)`, `large (500k +)`
+  ) %>%
+  gt(rowname_col = "var", groupname_col = "var_group") %>%
+  fmt_percent(columns = everything(), rows = str_detect(var, "(%)"), decimals = 1) %>%
+  fmt_currency(columns = everything(), currency = "USD", rows = str_detect(var, "(Gross)|(Income)"), decimals = 0) %>%
+  fmt_number(columns = everything(), rows = str_detect(var, "(Total)|(Number)"), decimals = 0) %>%
+  tab_header(
+    title = "Select Population and Housing Charteristics by City Size Categories, 2019"
+  ) %>%
+  tab_source_note("Source:  2015-2019 5-year American Community Survey, NYU Furman Center")
+
+table_1
+```
+
+
+## Change in City Population: 2000 - 2019
+
+
+#### Prepare summary statistics for Table 2
+```{r}
+# Create population change variable 
+all_city_comparison <- small_mid_city_pop_comparison %>%
+  mutate(change = (pop_num - pop_num_2000) / pop_num_2000)
+
+# Create counts based on set population change thresholds
+pop_change_by_city_size <- all_city_comparison %>%
+  group_by(size_type) %>%
+  summarize(
+    total_cities = n(),
+    count_pop_decrease_10_m = sum(change <= -0.10),
+    count_pop_decrease_0_10 = sum(change < 0 &
+      change > -0.10),
+    count_pop_increase_0_25 = sum(change > 0 &
+      change < 0.25),
+    count_pop_increase_25_50 = sum(change >= 0.25 &
+      change < 0.5),
+    count_pop_increase_50_100 = sum(change >= 0.5 &
+      change < 1.0),
+    count_pop_increase_100_m = sum(change > 1.0),
+    median_change = median(change),
+    mean_change = mean(change)
+  )
+
+# Create descriptive summaries based on population change thresholds
+perc_pop_change_by_city_size <- pop_change_by_city_size %>%
+  mutate(pop_decrease_10_m = count_pop_decrease_10_m / total_cities,
+    pop_decrease_0_10 = count_pop_decrease_0_10 / total_cities,
+    pop_increase_0_2 = count_pop_increase_0_25 / total_cities,
+    pop_increase_25_5 = count_pop_increase_25_50 / total_cities,
+    pop_increase_50_100 = count_pop_increase_50_100 / total_cities,
+    pop_increase_100_m = count_pop_increase_100_m / total_cities) %>%
+  transmute(size_type, total_cities, pop_decrease_10_m, pop_decrease_0_10, pop_increase_0_2, pop_increase_25_5, pop_increase_50_100, pop_increase_100_m, median_change, mean_change)
+
+perc_pop_change_by_city_size <- perc_pop_change_by_city_size %>%
+  rename( "City Size" = size_type,
+    "Number of Cities" = total_cities,
+    "Decrease > 10% (%)" = pop_decrease_10_m,
+    "Decrease 0-10% (%)" = pop_decrease_0_10,
+    "Increase 0-25% (%)" = pop_increase_0_2,
+    "Increase 25.1-50% (%)" = pop_increase_25_5,
+    "Increase 50.1-100% (%)" = pop_increase_50_100,
+    "Increase > 100% (%)" = pop_increase_100_m,
+    "Median Change" = median_change,
+    "Mean Change" = mean_change,
+  )
+
+```
+
+
+
+#### Table 2: Population Change by City Size, 2000 - 2015-19
+```{r}
+table_2 <- perc_pop_change_by_city_size %>%
+  gt() %>%
+  fmt_percent(columns = contains("%"), decimals = 1) %>%
+  fmt_percent(columns = contains("Median"), decimals = 1) %>%
+  fmt_percent(columns = contains("Mean"), decimals = 1) %>%
+  tab_header(
+    title = md("Population Change by City Size, 2000 - 2015-19"),
+    subtitle = md("Small, Small-Mid, Mid and Large Sized Cities")
+  ) %>%
+  tab_source_note(
+    source_note =
+      "Sources: 2000 Decennial Census and 2015-2019 5-year American Community Survey, NYU Furman Center"
+  )
+
+table_2
+```
+
+
+
+#### Calculate National Population Change
+```{r}
+# Pull national population (ACS 2015-2019)
+national_population_2019 <- get_acs(
+  geography = "us",
+  year = 2019,
+  survey = "acs5",
+  variables = "B01001_001"
+) %>%
+  collect() %>%
+  select(estimate) %>%
+  pull()
+
+# Pull National population (Decennial 2000)
+national_population_2000 <- fromJSON(paste0("https://api.census.gov/data/2000/dec/sf1?get=P001001,NAME&for=us:*&key=", census_api_key)) %>%
+  as_tibble() %>%
+  filter(V1 != "P001001") %>%
+  pull(V1) %>%
+  as.numeric()
+
+# subset data for only small, small-mid, and mid sized cities, calculate shares of the total nation population in 2000 and 2019
+small_mid_city_pop_comparison_sum <- small_mid_city_pop_comparison %>%
+  filter(!size_type == "large (500k +)")%>%
+  summarise(
+    pop_num = sum(pop_num),
+    pop_num_2000 = sum(pop_num_2000)
+  )%>%mutate(
+    pop_share_2019 = pop_num/national_population_2019, # Small, small-mid, and mid sized cities population as a share of the total 2019 Population
+    pop_share_2000 = pop_num_2000/ national_population_2000 # Small, small-mid, and mid sized cities cities as a share of the 2000 population
+  )
+
+# Create subset of large cities, calculate shares of the total nation population in 2000 and 2019
+large_city_pop_comparison_sum <- small_mid_city_pop_comparison %>%
+  filter(size_type == "large (500k +)")%>%
+  summarise(
+    pop_num = sum(pop_num),
+    pop_num_2000 = sum(pop_num_2000)
+  )%>%mutate(
+    large_pop_share_2019 = pop_num/national_population_2019, # Large cities as a share of the 2019 population
+    large_pop_share_2000 = pop_num_2000/ national_population_2000 # Large Cities as a share of the 2000 population
+  )
+
+```
+
+#### Population share results
+The share of national population that lives in small and mid-sized cities (50-500K population) was `r percent(small_mid_city_pop_comparison_sum$pop_share_2000, digits = 2L)` in 2000 decennial census, and it increased to `r percent(small_mid_city_pop_comparison_sum$pop_share_2019, digits = 2L)` in ACS 2015-2019.
+
+
+#### Figure 1: Small-Sized Cities (50-100K) Population Change, 2000-2019
+```{r, fig.width=7,fig.height=5}
+# Pull and reorganize the data for the figure
+all_city_comparison_viz <- all_city_comparison %>%
+  select(geo_name, change, size_type) %>%
+  group_by(size_type) %>%
+  arrange(change) %>%
+  mutate(change_rounded = (change - (change) %% 0.1)) %>%
+  mutate(y = ave(change_rounded, change_rounded, FUN = seq_along)) %>%
+  mutate(mean_change = 0.3378569) %>%
+  drop_na(geo_name)
+
+figure_1_data <- all_city_comparison_viz %>% filter(size_type == "small (50-100k)")
+
+figure_1 <- ggplot(figure_1_data, aes(x = change_rounded, y = y, tooltip =scales::percent(change, .1), 
+                       text = sprintf("%s<br>Change in homeownership rate, 2000- 2019: %s",
+                                      geo_name,
+                                      scales::percent(change, .1)) 
+      )
+                         ) +
+  geom_point(size = .2, alpha = .75) +
+  scale_x_continuous(labels = scales::percent, breaks = pretty_breaks(), limits = c(-.5, 2)) +
+  scale_y_continuous(breaks = pretty_breaks()) +
+  labs(
+    title = str_glue("Small-sized Cities (50-100k) Population Change, 2000-2019"),
+    caption = str_glue("Sources: 2000 Decennial Census and 2015-2019 5-year American Community Survey, NYU Furman Center"),
+    x = "Percentage Change",
+    y = "Count of Cities",
+    color = NULL
+  ) +
+  theme_minimal() +
+  theme(
+    plot.caption = element_text(hjust = 0, face = "italic"), # format the source caption
+    plot.title.position = "plot",
+    plot.caption.position = "plot"
+  )
+
+figure_1
+
+##make the figure interactive 
+plot_interactive_figure_1 <- ggplotly(figure_1, tooltip = 'text')
+
+plot_interactive_figure_1
+
+#Export as HTML
+saveWidget(plot_interactive_figure_1, "plot_interactive_figure_1.html")
+```
+
+
+## Change in Median Rent (2000-2019)
+
+
+#### Prepare data for Figure 2: Change in Weighted Median Rent (2000-2019)
+```{r}
+##Pull 2000 decennial Census median rent figures
+median_rent2000 <-
+  fromJSON(paste0("https://api.census.gov/data/2000/dec/sf3?get=H063001,NAME&for=place:*&key=", census_api_key)) %>%
+  as_tibble() %>%
+  transmute(
+    median_rent2000 = V1,
+    geo_name = V2,
+    geoid = str_glue("{V3}{V4}")
+  ) %>%
+  filter(median_rent2000 != "H063001")%>%
+  mutate(
+    median_rent2000 = as.numeric(median_rent2000)
+  )
+
+##Pull 2000 Decennial Census rental unit count figures
+count_rent2000 <-
+  fromJSON(paste0("https://api.census.gov/data/2000/dec/sf3?get=H062002,NAME&for=place:*&key=", census_api_key)) %>%
+  as_tibble() %>%
+  transmute(
+    count_rent2000 = V1,
+    geo_name = V2,
+    geoid = str_glue("{V3}{V4}")
+  ) %>%
+  filter(count_rent2000 != "H062002")%>%
+  mutate(
+    count_rent2000 = as.numeric(count_rent2000)
+  )
+
+# Adjust for inflation using the CPi (The CPI is defined in "Define External Variables")
+median_rent2000 <- median_rent2000 %>%
+  mutate(median_rent2000_norm = CPI * median_rent2000)
+
+## Join data
+median_rents <- small_mid_city_pop_comparison %>%
+  full_join(median_rent2000, by = "geoid") %>%
+  full_join(count_rent2000, by = "geoid") %>%
+  filter(size_type %in% c("mid (150-500k)", "small-mid (100-150k)", "small (50-100k)", "large (500k +)")) %>%
+  transmute(
+    geoid,
+    pop_num,
+    size_type,
+    median_rent2000,
+    median_rent2000_norm,
+    rent_gross_med,
+    count_rent2000,
+    unit_rent_cash_num,
+    agg_med_rent,
+    agg_med_rent2000 = median_rent2000_norm * count_rent2000 # Create 2000 weighted median aggregate rent
+  )
+
+# create summary total
+cities_median_rents <- median_rents %>%
+  group_by(size_type) %>%
+  summarise(
+    pop_num = sum(pop_num),
+    n = n(),
+    median_rent2000 = median(median_rent2000, na.rm = TRUE),
+    median_rent2000_norm = median(median_rent2000_norm, na.rm = TRUE),
+    rent_gross_med = median(rent_gross_med, na.rm = TRUE),
+    count_rent2000 = sum(count_rent2000, na.rm = TRUE),
+    unit_rent_cash_num = sum(unit_rent_cash_num, na.rm = TRUE),
+    agg_med_rent2000 = sum(agg_med_rent2000, na.rm = TRUE),
+    agg_med_rent = sum(agg_med_rent, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+#Select data for figure
+chart_data_rent <- cities_median_rents %>%
+  transmute(size_type,
+    wgt_med_gross_rent2000 = agg_med_rent2000 / count_rent2000,
+    wgt_med_gross_rent = agg_med_rent / unit_rent_cash_num
+  )%>%mutate(
+    wgt_med_gross_rent2000 = round(wgt_med_gross_rent2000, 0), #Round rent to integer
+    wgt_med_gross_rent = round(wgt_med_gross_rent, 0) #Round rent to integer
+  )
+
+
+#Shape data for figure
+chart_data_rent <- melt(chart_data_rent, id.vars = c("size_type"), measure.vars = c(
+  "wgt_med_gross_rent2000",
+  "wgt_med_gross_rent"
+))
+
+#format label
+chart_data_rent <- chart_data_rent %>%
+  mutate(variable = case_when(
+    variable == "wgt_med_gross_rent2000" ~ "Weighted Median Rent 2000 ($)",
+    variable == "wgt_med_gross_rent" ~ "Weighted Median Rent 2019 ($)"
+  ))
+```
+
+
+
+#### Figure 2: Weighted Median Gross Rent (in 2019 Dollars), 2000 and 2015-19
+```{r, fig.width=7,fig.height=5}
+## Median gross rents change figure
+figure_2 <- ggplot(data = chart_data_rent, aes(x = variable, y = value, label = value, tooltip = value, group = size_type,
+                                                text = sprintf("City size category: %s<br>%s: %s", 
+                                                size_type, 
+                                                str_sub(variable, end = -5),
+                                                scales::dollar(value))
+      )) +
+  geom_line(aes(color = size_type)) +
+  geom_point(aes(color = size_type)) +
+  geom_text_repel(data = chart_data_rent %>% filter(variable =="Weighted Median Rent 2000 ($)"), 
+                  aes(label = ifelse(value > 1, paste0("$", round(value, 0)), ""), y = value), 
+                  nudge_x = -0.1, size = 2.5, max.overlaps = Inf, box.padding = 0.2)  +
+    geom_text_repel(data = chart_data_rent %>% filter(variable =="Weighted Median Rent 2019 ($)"), 
+                    aes(label = ifelse(value > 1, paste0("$", round(value, 0)), ""), y = value), 
+                    nudge_x = 0.1, size = 2.5, max.overlaps = Inf, box.padding = 0.2)  +
+  scale_y_continuous(labels = scales::dollar_format(), breaks = pretty_breaks(), limits = c(850, 1400)) +
+  scale_color_manual(values = c("#01665e", "#5ab4ac", "#8c510a", "#d8b365")) +
+  theme_minimal() +
+  labs(
+    title = str_glue("Weighted Median Gross Rent (in 2019 Dollars), 2000 and 2015-19"),
+    subtitle = "Small-Mid Sized vs. Large Cities",
+    caption = str_glue("Sources: 2000 Decennial Census and 2015-2019 5-year American Community Survey, NYU Furman Center"),
+    x = "",
+    y = "Weighted Median Gross Rent",
+    color = NULL
+  ) +
+  theme(
+    plot.caption = element_text(hjust = 0, face = "italic"), # format the source caption
+    plot.title.position = "plot",
+    plot.caption.position = "plot"
+  )
+
+figure_2
+
+##make the figure interactive 
+plot_interactive_figure_2 <- ggplotly(figure_2, tooltip = 'text')%>%
+ layout(
+ legend = list(orientation = "h", yanchor = "top", y = 1.02),
+ title = list(text = paste0('Weighted Median Gross Rent (in 2019 Dollars), 2000 and 2015-19',
+                                    '<br>',
+                                    '<sup>',
+                                    'Small-Mid Sized vs. Large Cities',
+                                    '</sup>')))
+
+plot_interactive_figure_2
+
+#Export as HTML
+saveWidget(plot_interactive_figure_2, "plot_interactive_figure_2.html")
+
+```
+
+
+## Rental Cost Burden by Income
+
+
+#### Create data frame for Figure 3: rental housing cost burden rates by income group
+```{r}
+#Create summary data for Figure 3
+cities_size_cost_burden <-
+  small_mid_city_pop_comparison %>%
+  group_by(size_type) %>%
+  summarise(
+    pop_num = sum(pop_num),
+    n = n(),
+    cost_burden_less20K_est = sum(cost_burden_less20K_est, na.rm = TRUE),
+    count_less20K_est = sum(count_less20K_est, na.rm = TRUE),
+    cost_burden_20K34k_est = sum(cost_burden_20K34k_est, na.rm = TRUE),
+    count_20K34k_est = sum(count_20K34k_est, na.rm = TRUE),
+    cost_burden_35K49k_est = sum(cost_burden_35K49k_est, na.rm = TRUE),
+    count_35K49k_est = sum(count_35K49k_est, na.rm = TRUE),
+    cost_burden_50K74k_est = sum(cost_burden_50K74k_est, na.rm = TRUE),
+    count_50K74k_est = sum(count_50K74k_est, na.rm = TRUE),
+    cost_burden_more75k_est = sum(cost_burden_more75k_est, na.rm = TRUE),
+    count_more75k_est = sum(count_more75k_est, na.rm = TRUE)
+  ) %>%
+  ungroup() %>%
+  mutate(cost_burden_less20K_rate = cost_burden_less20K_est / count_less20K_est,
+         cost_burden_20K34k_rate = cost_burden_20K34k_est / count_20K34k_est,
+         cost_burden_35K49k_rate = cost_burden_35K49k_est / count_35K49k_est,
+         cost_burden_50K74k_rate = cost_burden_50K74k_est / count_50K74k_est,
+         cost_burden_more75k_rate = cost_burden_more75k_est / count_more75k_est) %>%
+  transmute(size_type, cost_burden_less20K_rate, cost_burden_20K34k_rate, cost_burden_35K49k_rate, cost_burden_50K74k_rate, cost_burden_more75k_rate)
+
+#Select and shape data frame for figure
+chart_data_burden <- melt(cities_size_cost_burden, id.vars = c("size_type"), measure.vars = c("cost_burden_less20K_rate", "cost_burden_20K34k_rate", "cost_burden_35K49k_rate", "cost_burden_50K74k_rate", "cost_burden_more75k_rate"))
+
+#Rename variables
+chart_data_burden <- chart_data_burden %>%
+  mutate(variable = case_when(
+    variable == "cost_burden_less20K_rate" ~ " Less than $20,000",
+    variable == "cost_burden_20K34k_rate" ~ "$20,000 to $34,999",
+    variable == "cost_burden_35K49k_rate" ~ "$35,000 to $49,999",
+    variable == "cost_burden_50K74k_rate" ~ "$50,000 to $74,999",
+    variable == "cost_burden_more75k_rate" ~ "$75,000 or more",
+  ))
+```
+
+
+
+#### Figure 3: Share of Rental Housholds who are Housing Cost Burdened by Income, 2019
+```{r, fig.width=7,fig.height=5}
+figure_3 <- ggplot(chart_data_burden, aes(x = variable, y = value, fill = size_type, label = scales::percent(value, .1), tooltip = scales::percent(value, .1),
+                                          text = sprintf("City size category: %s<br>Household Income: %s<br>Share of Rental Households who are Housing Cost Burdened: %s", 
+      size_type, variable, 
+      scales::percent(value, accuracy = .1)))) +
+  geom_bar(stat = "identity", width = .9, position = "dodge") +
+  # geom_text(
+  #   position = position_dodge(width = .9), # move to center of bars
+  #   vjust = -0.5, # nudge above top of bar
+  #   size = 2.1
+  # ) +
+  scale_fill_manual(values = c("#01665e", "#5ab4ac", "#8c510a", "#d8b365")) +
+  scale_y_continuous(labels = scales::percent, breaks = pretty_breaks()) +
+  labs(
+    title = str_glue("Share of Rental Households who are Housing Cost Burdened by Income, 2019"),
+    subtitle = "Small-Mid Sized vs. Large Cities",
+    caption = str_glue("Source: 2015-2019 5-year American Community Survey, NYU Furman Center"),
+    x = "Household Income",
+    y = "Share Cost Burdened",
+    color = NULL
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 12, hjust = 1), # tilts the x-axis text
+    legend.title = element_blank(), 
+    legend.text = element_text(size = 6),
+    legend.position = "top",
+    plot.caption = element_text(hjust = 0, face = "italic"), # format the source caption
+    plot.title.position = "plot",
+    plot.caption.position = "plot"
+  )
+
+figure_3
+
+plot_interactive_figure_3 <- ggplotly(figure_3
+                                      , tooltip = 'text')%>%
+ layout(
+   
+ legend = list(orientation = "v", title = ""),
+ title = list(text = paste0('Share of Rental Households who are Housing Cost Burdened by Income, 2019',
+                                    '<br>',
+                                    '<sup>',
+                                    'Small-Mid Sized vs. Large Cities',
+                                    '</sup>')))
+
+plot_interactive_figure_3
+
+#Export as HTML
+saveWidget(plot_interactive_figure_3, "plot_interactive_figure_3.html")
+```
+
+
+## Race and Homeownership
+
+
+#### Create dataframe for Figure 4: Homeownership rate in 2019 by race and ethicity
+```{r}
+## Calculate estimates grouped by city size
+cities_size_homeownership <-
+  small_mid_city_pop_comparison %>%
+  group_by(size_type) %>%
+  summarise(
+    pop_num = sum(pop_num),
+    n = n(),
+    homeowner_nonHisp_white_est = sum(homeowner_nonHisp_white_est),
+    count_nonHisp_white_est = sum(count_nonHisp_white_est),
+    homeowner_Black_est = sum(homeowner_Black_est),
+    count_Black_est = sum(count_Black_est),
+    homeowner_Asian_est = sum(homeowner_Asian_est),
+    count_Asian_est = sum(count_Asian_est),
+    homeowner_Latino_est = sum(homeowner_Latino_est),
+    count_Latino_est = sum(count_Latino_est)
+  ) %>%
+  ungroup() %>%
+  mutate(
+    homeowner_rate_nonHisp_white = homeowner_nonHisp_white_est / count_nonHisp_white_est,
+    homeowner_rate_Black = homeowner_Black_est / count_Black_est,
+      homeowner_rate_Asian = homeowner_Asian_est / count_Asian_est,
+      homeowner_rate_Latino = homeowner_Latino_est / count_Latino_est
+  )
+
+#Select summary stats for Figure 4
+homeownership_2019_gg <- cities_size_homeownership %>%
+  transmute(size_type, homeowner_rate_nonHisp_white, homeowner_rate_Black, homeowner_rate_Asian, homeowner_rate_Latino)
+
+#Shape data frame for figure
+chart_homeownership_2019 <- melt(homeownership_2019_gg, id.vars = c("size_type"), measure.vars = c("homeowner_rate_nonHisp_white", "homeowner_rate_Black", "homeowner_rate_Asian", "homeowner_rate_Latino"))
+
+#Rename variables
+chart_homeownership_2019 <- chart_homeownership_2019 %>%
+  mutate(variable = case_when(
+    variable == "homeowner_rate_nonHisp_white" ~ "Non-Hispanic white",
+    variable == "homeowner_rate_Black" ~ "Black",
+    variable == "homeowner_rate_Asian" ~ "Asian",
+    variable == "homeowner_rate_Latino" ~ "Hispanic"
+  ))
+```
+
+
+
+#### Figure 4: Homeownership Rates by Race and Ethnicity, 2019 ###
+```{r, fig.width=7,fig.height=5}
+figure_4 <- ggplot(chart_homeownership_2019, aes(size_type, value, label = scales::percent(value, .1), fill = factor(variable),
+                                                 tooltip = scales::percent(value, .1),
+                                          text = sprintf("City size category: %s<br>Race and ethnicty: %s<br>Homeownership rate, 2019: %s", 
+      size_type, variable, 
+      scales::percent(value, accuracy = .1)) )) +
+  geom_bar(stat = "identity", width = .9, position = "dodge") +
+  # geom_text(
+  #   position = position_dodge(width = .9), # move text to center of bars
+  #   vjust = -0.5, # nudge above top of bar
+  #   size = 2.1
+  # ) +
+  scale_fill_manual(values = c("#01665e", "#5ab4ac", "#8c510a", "#d8b365")) +
+  scale_y_continuous(labels = scales::percent, breaks = pretty_breaks()) +
+  labs(
+    title = str_glue("Homeownership Rates by Race and Ethnicity, 2019"),
+    subtitle = "Small-Mid Sized vs. Large Cities",
+    caption = str_glue("Source: 2015-2019 5-year American Community Survey, NYU Furman Center"),
+    x = "Race or Ethnicity of Householder",
+    y = "Homeownership Rate",
+    color = NULL
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 12, hjust = 1), # tilts the x-axis text
+    legend.title = element_blank(), 
+    legend.text = element_text(size = 6),
+    legend.position = "top",
+    plot.caption = element_text(hjust = 0, face = "italic"), # format the source caption
+    plot.title.position = "plot",
+    plot.caption.position = "plot"
+  )
+
+figure_4
+
+##make the figure interactive 
+plot_interactive_figure_4 <- ggplotly(figure_4, tooltip = 'text')%>%
+ layout(
+ legend = list(title = ""),
+ title = list(text = paste0('Homeownership Rates by Race and Ethnicity, 2019',
+                                    '<br>',
+                                    '<sup>',
+                                    'Small-Mid Sized vs. Large Cities',
+                                    '</sup>')))
+
+plot_interactive_figure_4
+
+#Export as HTML
+saveWidget(plot_interactive_figure_4, "plot_interactive_figure_4.html")
+
+```
+
+
+## Principal and Suburban Cities Summary
+
+#### Create dataframe for Table 3
+```{r}
+## Creating a descriptive summary table for Suburbs/Principal cities
+cities_size_stats_sub <-
+  small_mid_city_pop_comparison %>%
+  group_by(size_type, place_type) %>%
+  summarise(
+    total_population = sum(pop_num),
+    n = n(), 
+    place_type_flag = mean(place_type_flag),
+    pop_race_asian_num = sum(pop_race_asian_num),
+    pop_race_black_num = sum(pop_race_black_num),
+    pop_race_hisp_num = sum(pop_race_hisp_num),
+    pop_race_white_num = sum(pop_race_white_num),
+    pop_u18_num = sum(pop_u18_num),
+    pop_65p_num = sum(pop_65p_num),
+    pop_pov_num = sum(pop_pov_num),
+    pop_pov_denom_num = sum(pop_pov_denom_num),
+    unit_occ_num = sum(unit_occ_num),
+    unit_occ_own_num = sum(unit_occ_own_num),
+    unit_occ_rent_num = sum(unit_occ_rent_num),
+    unit_rent_cash_num = sum(unit_rent_cash_num),
+    rent_burden_num = sum(rent_burden_num),
+    unit_num = sum(unit_num),
+    unit_vac_num = sum(unit_vac_num),
+    rent_burden_sev_num = sum(rent_burden_sev_num),
+    rent_gross_den = sum(unit_rent_cash_num),
+    hh_inc_agg = sum(aggregate_hh_income_est),
+    hh_inc_den = sum(hh_income_count_est),
+    agg_med_rent = sum(agg_med_rent),
+    agg_med_hh_income = sum(agg_med_hh_income),
+    total_units = sum(total_units),
+    total_1_det = sum(total_1_det),
+    total_1_att = sum(total_1_att),
+    total_units_rent = sum(total_units_rent),
+    units_rent_1_det = sum(units_rent_1_det),
+    units_rent_1_att = sum(units_rent_1_att)
+  ) %>%
+  ungroup()%>%
+  mutate(
+  share_asian = pop_race_asian_num/total_population, #Share Asian,
+  share_black = pop_race_black_num /total_population, #Share Black
+  share_hisp = pop_race_hisp_num / total_population, #Share Hispanic
+  share_white = pop_race_white_num /total_population, #Share white
+  share_u18 = pop_u18_num / total_population, #Share under 18
+  share_over_65 = pop_65p_num / total_population, #Share over 65
+  share_poverty = pop_pov_num / pop_pov_denom_num, #Share Poverty
+  share_owner_occ = unit_occ_own_num / unit_occ_num, #Share Owner-Occupied
+  share_renter_occ = unit_occ_rent_num / unit_occ_num, #Share Renter Occupied
+  share_vacancy = unit_vac_num / unit_num, #Vacancy rate
+  share_rent_burden = rent_burden_num / unit_rent_cash_num, #Share Rent burdened
+  share_sev_rent_burden = rent_burden_sev_num / unit_rent_cash_num, #Share Severely Rent burdened
+  wgt_med_gross_rent = agg_med_rent / rent_gross_den,#Weighted median gross rent
+  wgt_med_hh_income = agg_med_hh_income / hh_inc_den,#Weighted median household income
+  share_total_1_det_att = (total_1_det + total_1_att)/ total_units,#share 1 unit detached and attached 
+  share_rent_1_det_att = (units_rent_1_det + units_rent_1_att)/ total_units_rent #share 1 unit rental detached and attached 
+  )%>% #Create new suburbs/Principal and city size indicator
+  mutate(place_type_size = case_when(
+    size_type == "large (500k +)" ~ "Principal - Large (500k+)",
+    size_type == "mid (150-500k)" & place_type == "Principal" ~ "Principal - Mid (150-500k)",
+    size_type == "mid (150-500k)" & place_type == "Suburbs" ~ "Suburbs - Mid (150-500k)",
+    size_type == "small-mid (100-150k)" & place_type == "Principal" ~ "Principal - Small-mid (100-150k)",
+    size_type == "small-mid (100-150k)" & place_type == "Suburbs" ~ "Suburbs - Small-mid (100-150k)",
+    size_type == "small (50-100k)" & place_type == "Principal" ~ "Principal - Small (50-100k)",
+    size_type == "small (50-100k)" & place_type == "Suburbs" ~ "Suburbs - Small (50-100k)"
+  ))%>%
+  transmute(total_population, n, share_asian, share_black, share_hisp, share_white, share_u18, share_over_65, share_poverty, wgt_med_hh_income, share_owner_occ, share_renter_occ, share_vacancy, share_rent_burden, share_sev_rent_burden, share_total_1_det_att, share_rent_1_det_att, wgt_med_gross_rent, place_type_size)
+
+```
+
+
+
+### Table 3: Select Population and Housing Characteristics by City Size Categories (Summary Statistics table)
+```{r}
+table_3 <- cities_size_stats_sub %>%
+  pivot_longer(-place_type_size, names_to = "var", values_to = "val") %>%
+  pivot_wider(names_from = place_type_size, values_from = val) %>%
+  mutate(
+    var_group = case_when(
+      var %in% c("n", "total_population") ~ "Basic Stats",
+      str_detect(var, "share_(asian|black|hisp|white)") ~ "Racial/Ethnic Composition",
+      # Add more groups here
+      var %in% c("share_u18", "share_over_65", "share_poverty", "wgt_med_hh_income") ~ "Age and Income",
+      var %in% c("share_owner_occ", "share_renter_occ", "share_vacancy", "share_rent_burden", "share_sev_rent_burden", "share_total_1_det_att", "share_rent_1_det_att", "wgt_med_gross_rent") ~ "Housing Characteristics",
+    ),
+    var = recode(
+      var,
+      "n" = "Number of Cities",
+      "total_population" = "Total Population",
+      "place_type_flag" = "Core City (%)",
+      "share_asian" = "Asian (%)",
+      "share_black" = "Black (%)",
+      "share_hisp" = "Hispanic (%)",
+      "share_white" = "White (%)",
+      "share_u18" = "Under 18 Years (%)",
+      "share_over_65" = "65 Years or Older (%)",
+      "share_poverty" = "Poverty (%)",
+      "wgt_med_hh_income" = "Weighted Median Household Income ($)",
+      "share_owner_occ" = "Owner-Occupied (%)",
+      "share_renter_occ" = "Renter-Occupied (%)",
+      "share_vacancy" = "Vacancy (%)",
+      "share_rent_burden" = "Rent Burdened (%)",
+      "share_sev_rent_burden" = "Severely Rent Burdened (%)",
+      "share_total_1_det_att" = "Single-Family (1-Unit) Residence (%)",
+      "share_rent_1_det_att" = "Single-Family (1-Unit) Rental (%)",
+      "wgt_med_gross_rent" = "Weighted Median Gross Rent ($)",
+    )
+  ) %>%
+  select(
+    var, var_group,
+    `Principal - Large (500k+)`, `Principal - Mid (150-500k)`, `Suburbs - Mid (150-500k)`, `Principal - Small-mid (100-150k)`, `Suburbs - Small-mid (100-150k)`, `Principal - Small (50-100k)`, `Suburbs - Small (50-100k)`
+  ) %>%
+  gt(rowname_col = "var", groupname_col = "var_group") %>%
+  fmt_percent(columns = everything(), rows = str_detect(var, "(%)"), decimals = 1) %>%
+  fmt_currency(columns = everything(), currency = "USD", rows = str_detect(var, "(Gross)|(Income)"), decimals = 0) %>%
+  fmt_number(columns = everything(), rows = str_detect(var, "(Total)|(Number)"), decimals = 0) %>%
+  tab_header(
+    title = "Select Population and Housing Charteristics by City Size Categories, 2019",
+  ) %>%
+  tab_source_note("Sources: 2015-2019 5-year American Community Survey, NYU Furman Center")
+
+table_3
+```

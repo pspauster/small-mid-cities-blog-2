@@ -426,6 +426,8 @@ num_serving <- as.data.frame(all_cities_joined) %>%
   ungroup()
   
 
+#How many states have a state HA?
+
 ```
 
 ```{r}
@@ -649,6 +651,7 @@ mix_hh_served %>%
   remove_ticks() +
   guides(color = FALSE)
 
+# how many places had no vouchers or no public housing at all
 
 ```
 
@@ -875,6 +878,22 @@ census_psh_places %>%
 
 
 ```
+
+check on... 1/5/21
+-disability seems low
+-add average housing assistance amount
+-how many state phas are there
+-how many w/no vouchers or no public housing
+-proportion that live in low/med/high  pov
+-how does the data define high poverty
+
+
+
+small analysis for Kathy/Martha week of 1/5
+-PHAs listed under the small PHA cohort in this list from HUD: https://www.hud.gov/program_offices/public_indian_housing/programs/ph/mtw/mtwagencies
+-how many people they serve
+-the demographics you've been putting together, etc.
+-population of the cities/counties they serve, so we can know how many fall in our target range. 
 
 
 

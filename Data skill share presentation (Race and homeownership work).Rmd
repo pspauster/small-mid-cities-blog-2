@@ -1,0 +1,757 @@
+---
+title: "Data Skills Share Presentation - Assessing Black Homeownership Decline in SMCs"
+author: "Housing Solutions Lab (Carl Hedman - cgh294@nyu.edu)"
+date: "12/03/2021"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+
+```{r load-packages-set-options,results='hide',message = FALSE, warning=FALSE, include=TRUE}
+#### Add libraries and formats
+#if (system.file(package = "inlmisc", lib.loc = .libPaths()) == "")
+ # utils::install.packages("inlmisc", dependencies = TRUE)
+library(tidyverse) # general data manipulation and graphing
+library(reshape2)
+library(lubridate) # format dates
+library(scales) # number formatting
+library(janitor) # data cleaning
+library(hrbrthemes)
+library(gt) # formatting tables
+library(tidycensus) # pulling in census data
+library(jsonlite)
+library(ggplot2) # making graphs
+library(acssf)
+library(ggrepel) # Editing graph lables (we don't use this yet)
+library(leaflet) #Creates maps
+library(tigris) #Pull Census shapefiles
+library(leafpop)# (confirm we need this)
+library(plotly)# interactive ggplot for mouseover
+library(leaflet.extras)
+library(leaflegend)
+
+options(tigris_class = "sf")
+
+
+```
+
+<br>
+
+#### Background and Methodology
+We draw on the 2000 decennial census and 5-year American Community Survey (ACS) data from 2015-2019 to compare indicators for U.S. Census-designated places in all 50 states and D.C. with a population of 50,000 or more (which we will refer to as 2019 for ease of presentation). While not all Census-designated places with populations of 50,000 or greater are cities in terms of their governmental structure, we define them as “cities” for the purposes of this analysis. Based on cities’ 2019 ACS populations, small and midsize cities are defined as places with 50,000 to 499,999 residents, and large cities as places with 500,00 or more residents. We exclude cities established after the 2000 Census and those that merged with their county jurisdiction (e.g., Louisville, KY) over the period. Our final sample includes 782 small and midsize cities.
+
+We utilize Bureau of Labor Statistics' Consumer Price Index (CPI) factor to normalize rents between 2000 and 2019. 
+
+```{r, echo=TRUE,fig.keep='all', results='hide', warning=FALSE, include=TRUE}
+### CPI (Consumer Price Index) to adjust for inflation between 2000 and 2019
+#Add inflation factor: 2000 rents in 2019 dollars (source: https://www.bls.gov/data/inflation_calculator.htm)
+CPI <- 1.49118 # Change the CPI to represent the studied years using the bls inflation calculator. 
+
+### Census API Key
+# Input your census API key below to access the census data. You can sign-up for a key here:https://api.census.gov/data/key_signup.html
+census_api_key = "c32dfbf7d25fe9558fd11bf021780457970f96ff"
+
+```
+
+<br>
+<br>
+
+```{r, echo=FALSE,fig.keep='all', results='hide', warning=FALSE, include=TRUE}
+# Searching census codes for 2015-19
+v19 <- load_variables(2019, "acs5", cache = TRUE)
+
+##pull 2015-19 ACS place-level data from API using get_acs
+census_2019 <- get_acs(
+  geography = "place",
+  year = 2019,
+  survey = "acs5",
+  output = "wide",
+  geometry = FALSE,
+  moe_sum = FALSE,
+  key = census_api_key,
+  variables = c(
+    "B01003_001E", # pop_num,
+    "B03002_006E", # pop_race_asian_num
+    "B03002_004E", # pop_race_black_num
+    "B03002_012E", # pop_race_hisp_num
+    "B03002_003E", # pop_race_white_num
+    "B25003H_002E", # homeowner_nonHisp_white_est
+    "B25003H_001E", # count_nonHisp_white_est
+    "B25003B_002E", # homeowner_Black_est
+    "B25003B_001E", # count_Black_est
+    "B25003D_002E", # homeowner_Asian_est
+    "B25003D_001E", # count_Asian_est
+    "B25003I_002E", # homeowner_Latino_est
+    "B25003I_001E", # count_Latino_est
+    "B25003_002E", #homeowner_est 
+    "B25003_001E", #household_count_est
+    "B19013B_001E", # median_household_income_Black
+    "B19013H_001E", # median_household_income_white
+    "B19013D_001E", # median_household_income_Asian
+    "B19013I_001E", # median_household_income_Hispanic
+    "B25077_001E" #median_value_own_occ
+
+  )
+) 
+##create city size groupings
+census_2019 <- census_2019 %>%
+  mutate(size_type_update = case_when(
+    B01003_001E >= 50000 & B01003_001E < 500000 ~ "Small and midsize cities  (50k-500k)",
+    B01003_001E >= 500000 ~ "Large cities (500k +)"
+  )) %>%
+  filter(!is.na(size_type_update))
+
+# Select variables needed for the analysis below
+census_2019 <- census_2019 %>%
+  select(
+    geoid = "GEOID",
+    NAME,
+    pop_num =  "B01003_001E", 
+    pop_race_asian_num = "B03002_006E", 
+    pop_race_black_num = "B03002_004E", 
+    pop_race_hisp_num = "B03002_012E", 
+    pop_race_white_num  = "B03002_003E", 
+    homeowner_nonHisp_white_est = "B25003H_002E", 
+    count_nonHisp_white_est = "B25003H_001E", 
+    homeowner_Black_est = "B25003B_002E", 
+    count_Black_est = "B25003B_001E", 
+    homeowner_Asian_est = "B25003D_002E", 
+    count_Asian_est = "B25003D_001E", 
+    homeowner_Latino_est = "B25003I_002E", 
+    count_Latino_est = "B25003I_001E", 
+    homeowner_est = "B25003_002E", #homeowner_est 
+    household_count_est = "B25003_001E", #household_count_est
+    median_household_income_Black = "B19013B_001E",
+    median_household_income_white = "B19013H_001E",
+    median_household_income_Asian =  "B19013D_001E", 
+    median_household_income_Hispanic = "B19013I_001E", 
+    median_value_own_occ = "B25077_001E", #
+    "size_type_update"
+  )
+# Save as a data frame
+census_2019 <- data.frame(census_2019)
+```
+
+
+
+```{r, echo=FALSE,fig.keep='all', results='hide', warning=FALSE, include=TRUE}
+#### 2000 Decenial Census data
+# Searching census codes
+v2000 <- load_variables(2000, "sf1", cache = TRUE)
+#write_csv(v2000, "v2000.csv")
+
+#Creating a dataframe that has all the 2000 variables 
+variables_df <- c(
+     "P001001", #pop_2000
+     "P008003", #pop_white_nh_2000
+     "P008004", #pop_black_nh_2000
+     "P008006", #pop_asian_nh_2000
+     "P008010", #pop_hispanic_2000
+    "H015I002",#	homeowner_nonHisp_white_est2000
+    "H015I001",#	count_nonHisp_white_est2000
+    "H015B002",#	homeowner_Black_est2000
+    "H015B001",#	count_Black_est2000
+    "H015D002",#	homeowner_Asian_est2000
+    "H015D001", #	count_Asian_est2000
+    "H015H002",#	homeowner_Latino_est2000
+    "H015H001",#	count_Latino_est2000
+    "H004002",#	homeowner_est2000
+    "H004001" #	count_households_est2000
+  )
+# Pulling the 2000 variables from ACS
+variables_2000_list <- map(variables_df, function(x) 
+  {(variables_2000 <- get_decennial(
+  geography = "place",
+  year = 2000,
+  sumfile = "sf1",
+  output = "wide",
+  key = census_api_key,
+  variables = x))})
+
+census_2000 <- reduce(variables_2000_list,left_join, by = c("GEOID", "NAME"))
+
+# Select variables needed for the analysis below
+census_2000 <- census_2000 %>%
+  select(
+    geoid = "GEOID",
+    pop_2000 = "P001001", #
+    pop_white_nh_2000 = "P008003", #
+    pop_black_nh_2000 = "P008004", #
+    pop_asian_nh_2000 = "P008006", #
+    pop_hispanic_2000 = "P008010", #
+   homeowner_nonHisp_white_est2000 = "H015I002",
+    count_nonHisp_white_est2000= "H015I001",
+    homeowner_Black_est2000 = "H015B002",#	
+    count_Black_est2000 = "H015B001",#	
+    homeowner_Asian_est2000 = "H015D002",#	
+    count_Asian_est2000 = "H015D001", #	
+    homeowner_Latino_est2000 = "H015H002",#	
+    count_Latino_est2000 = "H015H001",#	
+    homeowner_est2000 = "H004002",#	
+    household_count_est2000 = "H004001" #	
+  )
+census_2000 <- census_2000 %>%
+  mutate(homeowner_rate_nonHisp_white2000 = (homeowner_nonHisp_white_est2000 / count_nonHisp_white_est2000),
+         homeowner_rate_Black2000 = (homeowner_Black_est2000 / count_Black_est2000),
+         homeowner_rate_Asian2000 = (homeowner_Asian_est2000 / count_Asian_est2000),
+         homeowner_rate_Latino2000 = (homeowner_Latino_est2000 / count_Latino_est2000),
+         homeowner_rate2000 = (homeowner_est2000 / household_count_est2000)
+         )
+
+
+##Pull 2000 decennial Census median rent figures
+median_hh_income_Black_2000 <-
+  fromJSON(paste0("https://api.census.gov/data/2000/dec/sf3?get=P152B001,NAME&for=place:*&key=", census_api_key))%>%
+  as_tibble() %>%
+  transmute(
+    median_hh_income_Black_2000 = V1,
+    geoid = str_glue("{V3}{V4}")
+  ) %>%
+  filter(median_hh_income_Black_2000 != "P152B001")%>%
+  mutate(
+    median_hh_income_Black_2000 = as.numeric(median_hh_income_Black_2000)
+  )
+##Pull 2000 decennial Census median rent figures
+median_hh_income_white_nh_2000 <-
+  fromJSON(paste0("https://api.census.gov/data/2000/dec/sf3?get=P152I001,NAME&for=place:*&key=", census_api_key)) %>%
+  as_tibble() %>%
+  transmute(
+    median_hh_income_white_nh_2000 = V1,
+    geoid = str_glue("{V3}{V4}")
+  ) %>%
+  filter(median_hh_income_white_nh_2000 != "P152I001")%>%
+  mutate(
+    median_hh_income_white_nh_2000 = as.numeric(median_hh_income_white_nh_2000)
+  )
+##Pull 2000 decennial Census median rent figures
+median_hh_income_Asian_2000 <-
+  fromJSON(paste0("https://api.census.gov/data/2000/dec/sf3?get=P152D001,NAME&for=place:*&key=", census_api_key)) %>%
+  as_tibble() %>%
+  transmute(
+    median_hh_income_Asian_2000 = V1,
+    geoid = str_glue("{V3}{V4}")
+  ) %>%
+  filter(median_hh_income_Asian_2000 != "P152D001")%>%
+  mutate(
+    median_hh_income_Asian_2000 = as.numeric(median_hh_income_Asian_2000)
+  )
+##Pull 2000 decennial Census median rent figures
+median_hh_income_hispanic_2000 <-
+  fromJSON(paste0("https://api.census.gov/data/2000/dec/sf3?get=P152H001,NAME&for=place:*&key=", census_api_key)) %>%
+  as_tibble() %>%
+  transmute(
+    median_hh_income_hispanic_2000 = V1,
+    geoid = str_glue("{V3}{V4}")
+  ) %>%
+  filter(median_hh_income_hispanic_2000 != "P152H001")%>%
+  mutate(
+    median_hh_income_hispanic_2000 = as.numeric(median_hh_income_hispanic_2000)
+  )
+median_value_own_occ_2000 <-
+  fromJSON(paste0("https://api.census.gov/data/2000/dec/sf3?get=H085001,NAME&for=place:*&key=", census_api_key)) %>%
+  as_tibble() %>%
+  transmute(
+    median_value_own_occ_2000 = V1,
+    geoid = str_glue("{V3}{V4}")
+  ) %>%
+  filter(median_value_own_occ_2000 != "H085001")%>%
+  mutate(
+    median_value_own_occ_2000 = as.numeric(median_value_own_occ_2000)
+  )
+
+
+# Join 2000 data
+census_2000 <- census_2000 %>%
+  full_join(median_hh_income_Black_2000, by = "geoid")%>%
+  full_join(median_hh_income_white_nh_2000, by = "geoid")%>%
+  full_join(median_hh_income_Asian_2000, by = "geoid")%>%
+  full_join(median_hh_income_hispanic_2000, by = "geoid")%>%
+  full_join(median_value_own_occ_2000, by = "geoid")
+
+# Adjust for inflation using the CPi (The CPI is defined in "Define External Variables")
+census_2000 <- census_2000 %>%
+  mutate(median_hh_income_Black_2000_norm = CPI * median_hh_income_Black_2000,
+         median_hh_income_white_nh_2000_norm = CPI * median_hh_income_white_nh_2000,
+         median_hh_income_Asian_2000_norm = CPI * median_hh_income_Asian_2000,
+         median_hh_income_hispanic_2000_norm = CPI * median_hh_income_hispanic_2000,
+         median_value_own_occ_2000_norm = CPI * median_value_own_occ_2000)
+
+```
+
+```{r, echo=FALSE,fig.keep='all', results='hide', warning=FALSE, include=TRUE}
+#Joining 2019 to 2000 data
+homeownership_data <- census_2019 %>%
+  full_join(census_2000, by = "geoid")%>%
+  filter(size_type_update%in% c("Small and midsize cities  (50k-500k)", "Large cities (500k +)"))
+``` 
+
+
+```{r, echo=FALSE,fig.keep='all', results='hide', warning=FALSE, include=FALSE}
+# Dropping cities that were not included in the 2000 census, cities outside the 50-states, and those that merged with their county jurisdiction to form a unified government over the period.
+homeownership_data <- filter(homeownership_data, ! geoid %in% c("0464210", "0621230", "0637692", "0646842", "0812815", "1200410", "1245060", "1310944", "1319000", "1342425", "1349008", "1372122", "1373784", "1571550", "2148006", "2578972", "2483775", "5103320", "5367167", "1271625", "7276770", "7206593", "7214290", "7263820", "7210334", "7232522", "7252431" ))
+```
+
+     
+```{r, echo=FALSE,fig.keep='all', results='hide', warning=FALSE, include=FALSE}
+
+# Define placed as "principal city"  as "Principal" and those excluded as "suburbs". More on the Census designations here: https://www.census.gov/programs-surveys/metro-micro/about.html#:~:text=The%20largest%20city%20in%20each,concerning%20population%20size%20and%20employment.
+
+principal_cities <- read_csv("metro_micro_principal_cities_2018_census.csv", n_max = 1268) %>%
+  mutate(principal_city = TRUE)%>%
+  mutate(
+    format_zeros= str_pad(geoid, width = 7, side = "left", pad = "0") # Address leading zeros issue
+  )%>%
+  select(format_zeros, principal_city) %>%
+  rename(geoid = format_zeros) 
+
+# Join data, and create principal and suburbs flag
+homeownership_data <- homeownership_data %>%
+    left_join(principal_cities, by = "geoid")%>%
+  mutate(place_type = case_when(
+    principal_city == TRUE ~ "Principal",
+    is.na(principal_city) ~ "Suburbs"
+  )) %>%
+  mutate(place_type_flag = case_when(
+    principal_city == TRUE ~ 1,
+    is.na(principal_city) ~ 0
+  ))
+
+## Create state IDs based on geoid
+homeownership_data <- homeownership_data %>%
+ mutate(stateid = substr(geoid, 1,2)
+ )
+```
+
+
+```{r, echo=FALSE,fig.keep='all', results='hide', warning=FALSE, include=TRUE}
+#### Summary Statsitics by city size
+cities_size_homeownership<-
+  homeownership_data %>%
+  group_by(size_type_update) %>%
+  summarise(
+    pop_num = sum(pop_num), n = n(), homeowner_nonHisp_white_est = sum(homeowner_nonHisp_white_est), count_nonHisp_white_est = sum(count_nonHisp_white_est), homeowner_Black_est = sum(homeowner_Black_est), count_Black_est = sum(count_Black_est),homeowner_Asian_est = sum(homeowner_Asian_est), count_Asian_est = sum(count_Asian_est),homeowner_Latino_est = sum(homeowner_Latino_est), count_Latino_est = sum(count_Latino_est), homeowner_nonHisp_white_est2000 = sum(homeowner_nonHisp_white_est2000, na.rm = TRUE), count_nonHisp_white_est2000 = sum(count_nonHisp_white_est2000, na.rm = TRUE), homeowner_Black_est2000 = sum(homeowner_Black_est2000, na.rm = TRUE), count_Black_est2000 = sum(count_Black_est2000, na.rm = TRUE),homeowner_Asian_est2000 = sum(homeowner_Asian_est2000, na.rm = TRUE), count_Asian_est2000 = sum(count_Asian_est2000, na.rm = TRUE),homeowner_Latino_est2000 = sum(homeowner_Latino_est2000, na.rm = TRUE), count_Latino_est2000 = sum(count_Latino_est2000, na.rm = TRUE), pop_2000 = sum(pop_2000, na.rm = TRUE), pop_white_nh_2000 = sum(pop_white_nh_2000, na.rm = TRUE), pop_black_nh_2000 = sum(pop_black_nh_2000, na.rm = TRUE), pop_asian_nh_2000 = sum(pop_asian_nh_2000, na.rm = TRUE), pop_hispanic_2000 = sum(pop_hispanic_2000, na.rm = TRUE)
+    ) %>%
+  ungroup()%>%
+  mutate(homeowner_rate_nonHisp_white = homeowner_nonHisp_white_est / count_nonHisp_white_est,
+          homeowner_rate_Black = homeowner_Black_est / count_Black_est,
+          homeowner_rate_Asian = homeowner_Asian_est / count_Asian_est,
+          homeowner_rate_Latino = homeowner_Latino_est / count_Latino_est,
+          homeowner_rate_nonHisp_white2000 = homeowner_nonHisp_white_est2000 / count_nonHisp_white_est2000,
+          homeowner_rate_Black2000 =  homeowner_Black_est2000 / count_Black_est2000,
+          homeowner_rate_Asian2000 = homeowner_Asian_est2000 / count_Asian_est2000,
+          homeowner_rate_Latino2000 = homeowner_Latino_est2000 / count_Latino_est2000,
+          ownership_change_nonHisp_white = homeowner_rate_nonHisp_white - homeowner_rate_nonHisp_white2000,
+          ownership_change_Black = homeowner_rate_Black - homeowner_rate_Black2000,
+          ownership_change_Asian = homeowner_rate_Asian - homeowner_rate_Asian2000,
+          ownership_change_Latino = homeowner_rate_Latino - homeowner_rate_Latino2000,
+          Black_white_gap = homeowner_rate_nonHisp_white - homeowner_rate_Black,
+          Asian_white_gap = homeowner_rate_nonHisp_white - homeowner_rate_Asian,
+          Latino_white_gap = homeowner_rate_nonHisp_white - homeowner_rate_Latino,
+         )
+
+```
+
+
+
+```{r, echo=FALSE,message = FALSE, warning=FALSE, include=TRUE}
+#### Format data for figures
+homeownership_change_gg<-  cities_size_homeownership%>%
+  transmute(size_type_update, ownership_change_nonHisp_white, ownership_change_Black, ownership_change_Asian, ownership_change_Latino)
+
+chart_homeownership_change <-  melt(homeownership_change_gg, id.vars = c("size_type_update"), measure.vars = c("ownership_change_nonHisp_white", "ownership_change_Black", "ownership_change_Asian", "ownership_change_Latino"))
+
+chart_homeownership_change <- chart_homeownership_change %>%
+  mutate(variable = case_when(
+             variable == "ownership_change_nonHisp_white" ~ "Non-Hispanic White",
+             variable == "ownership_change_Black" ~ "Black",
+             variable == "ownership_change_Asian" ~ "Asian",
+             variable == "ownership_change_Latino" ~ "Hispanic"
+           ))%>%mutate(
+             value = value*100
+           )
+
+```
+
+
+
+```{r, echo=FALSE,message = FALSE, warning=FALSE,  include=TRUE}
+#### Figure 1: Change in Homeownership Rates by Race and Ethnicity, 2000 - 2019 
+figure_1 <- ggplot(chart_homeownership_change, 
+                   aes(size_type_update, value,fill=interaction(variable), label = scales::number(value, .1), tooltip =scales::percent(value, .1), 
+                       text = sprintf("City size category: %s<br>Race and ethnicty: %s<br>Percentage point change in homeownership rate, 2000- 2019: %s", 
+      size_type_update, variable, 
+      scales::comma(value, accuracy = .1) 
+      )
+                         )) +
+  geom_bar(stat='identity', width = .75, position='dodge') + #add custom data label notation
+   annotate(geom = "text", x = .7, y = 5.5, label = "5.2", hjust = "left", size = 3.4)+ #add custom data label notation
+   annotate(geom = "text", x = .9, y = -4.8, label = "-4.4", hjust = "left", size = 3.4)+ #add custom data label notation
+   annotate(geom = "text", x = 1.1, y = 2.75, label = "2.4", hjust = "left", size = 3.4)+ #add custom data label notation
+   annotate(geom = "text", x = 1.27, y = -.9, label = "-0.6", hjust = "left", size = 3.4)+ #add custom data label notation
+   annotate(geom = "text", x = 1.72, y = 6.08, label = "5.8", hjust = "left", size = 3.4)+#add custom data label notation
+  annotate(geom = "text", x = 1.89, y = -4.8, label = "-4.4", hjust = "left", size = 3.4)+#add custom data label notation
+    annotate(geom = "text", x = 2.1, y = .4, label = "0.2", hjust = "left", size = 3.4)+#add custom data label notation
+      annotate(geom = "text", x = 2.28, y = -1.28, label = "-0.9", hjust = "left", size = 3.4)+#add custom data label notation
+
+  theme_bw() + theme(axis.text.x = element_text( hjust=1)) +
+  scale_fill_manual(values =  c("#1f687e","#F1D8D4","#a6e0e0", "#904f35"))+ #add color fill 
+    scale_y_continuous(labels = scales::number, breaks = pretty_breaks())+  #format labels
+  labs(
+    x = "",
+    y = "Percentage point change in homeownership",
+    color = NULL
+  )+
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 8), #format title
+    axis.title.y = element_text(size = 8), #format title
+    axis.text.x = element_text(hjust = 1, size = 8), # tilts the x-axis text
+    axis.text.y = element_text(size = 8), # tilts the x-axis text
+    legend.title = element_blank(), #format legend
+    legend.text = element_text(size = 10), #format legend
+    legend.position = "top", #format legend
+    plot.caption = element_text(hjust = 0, face = "italic", size = 10), # format the source caption
+    plot.title.position = "plot",
+    plot.caption.position = "plot"
+  )
+##make the figure interactive 
+plot_interactive_figure_1 <- ggplotly(figure_1, tooltip = 'text')%>%
+ layout(annotations = 
+ list(x = 1, y = -0.2, text = "<i>Source: 2015-2019 5-year American Community Survey and New York State ERAP Application Figures as of 8/31/21 (NY OTDA), NYU Furman Center.</i>", 
+      showarrow = F, xref='paper', yref='paper', 
+      xanchor='right', yanchor='auto', xshift=0, yshift=0,
+      font=list(family = "verdana", size=8)))
+
+plot_interactive_figure_1
+
+#Export as HTML
+#saveWidget(plot_interactive_figure_1, "/Users/carlhedman/Documents/NYU/Race and homeownership blog/Final figures/Webfiles/plot_interactive_figure_1.html")
+```
+
+
+```{r, echo=FALSE,fig.keep='all', results='hide', warning=FALSE, include=FALSE}
+#### Pull in shapefiles for maps
+##Loop to create all states
+for (i in state.abb) {
+nam <- paste("pl_", i, sep = "")
+assign(nam,
+       places(state=i, cb = TRUE, year=2018)%>%
+  mutate(geoid = GEOID))
+}
+##pull in the DC shapefile
+pl_DC <- places(state=11, cb = TRUE, year=2018)%>% 
+  mutate(geoid = GEOID)
+
+##Bind all state place level data to create national map shapefile
+pl_all <- rbind (pl_AK, pl_AL, pl_AR, pl_AZ, pl_CA, pl_CO, pl_CT, pl_DE, pl_DC, pl_FL, pl_GA, pl_HI, pl_IA, pl_ID, pl_IL, pl_IN, pl_KS, pl_KY, pl_LA, pl_MA, pl_MD, pl_ME, pl_MI, pl_MN, pl_MO, pl_MS, pl_MT, pl_NC, pl_ND, pl_NE, pl_NH, pl_NJ, pl_NM, pl_NV, pl_NY, pl_OH, pl_OK, pl_OR, pl_PA, pl_RI, pl_SC, pl_SD, pl_TN, pl_TX, pl_UT, pl_VA, pl_VT, pl_WA, pl_WI, pl_WY )
+
+##Join to data set
+place_data <- pl_all %>%
+  inner_join(homeownership_data, by = "geoid")
+
+##Create color scheme
+pal <- colorFactor(
+  palette = c('#1f687e', '#d83d22', '#904f35', '#c8e9f1'),
+  levels= place_data$Black_ownership_change
+)
+ 
+```
+
+
+```{r, echo=TRUE,fig.keep='all', results='hide', warning=FALSE, include=FALSE}
+#### Create city map choropleth bins and map labels
+##note: table code broadly uses HTML notation to construct 
+labels_table <- sprintf("<strong>%s</strong><br/>
+<i>%s</i><br/>
+Population in 2019: <strong>%s</strong><br/>
+Median value of owner-occupied homes, 2019: <strong>$%s</strong><br/>
+    <style>
+      table {
+        border-collapse: collapse;
+      }
+      td,
+      th {
+        padding: 5px;
+        border-bottom: 1.5px solid #1c87c9;
+      }
+    </style>
+<table>
+  <tr>
+    <td>&nbsp;</td> #specify row  labels
+    <th>Black</td> #specify row  labels
+    <th>White</td> #specify row  labels
+    <th>Asian</td> #specify row  labels
+    <th>Hispanic</td> #specify row  labels
+  </tr>
+    <tr>
+    <td>Share of Population, `19</td> #specify column labels
+    <td>%1.1f%%</td> #create cell for data 
+    <td>%1.1f%%</td>  #create cell for data 
+    <td>%1.1f%%</td> #create cell for data 
+    <td>%1.1f%%</td> #create cell for data  
+  </tr>
+    <tr>
+    <td>Homeownership Rate, `19</td> #specify column labels
+    <td>%1.1f%%</td>#create cell for data 
+    <td>%1.1f%%</td> #create cell for data 
+    <td>%1.1f%%</td> #create cell for data 
+    <td>%1.1f%%</td>#create cell for data 
+  </tr>
+  <tr>
+    <td>Change in Homeownership Rate<br>Percentage Points, '00-'19</td>
+    <td>%+1.1f</td>
+    <td>%+1.1f</td>
+    <td>%+1.1f</td>
+    <td>%+1.1f</td>
+  </tr>
+  <tr>
+    <td>Change in Number of Homeowners<br>Numeric, '00-'19</td>
+    <td>%+s</td>
+    <td>%+s</td>
+    <td>%+s</td>
+    <td>%+s</td>
+  </tr>
+    <tr>
+    <td>Median Household Income, `19</td>
+    <td>$%s</td>
+    <td>$%s</td>
+    <td>$%s</td>
+    <td>$%s</td>
+  </tr>
+</table>
+                        ",
+  place_data$NAME.y, #include the data in the order specified above
+  place_data$Black_ownership_change_long,  #include the data in the order specified above
+  prettyNum(place_data$pop_num, big.mark = ","), #include the data in the order specified above, include formatting
+  prettyNum(place_data$median_value_own_occ, big.mark = ","), #include the data in the order specified above, include formatting
+
+  place_data$share_pop_black*100, #include the data in the order specified above, include formatting
+  place_data$share_pop_white*100,
+  place_data$share_pop_asian*100,
+  place_data$share_pop_hisp*100,
+
+  place_data$homeowner_rate_Black*100, #include the data in the order specified above, include formatting
+  place_data$homeowner_rate_nonHisp_white*100, 
+  place_data$homeowner_rate_Asian*100,  
+  place_data$homeowner_rate_Latino*100,  
+
+  place_data$ownership_per_change_Black*100, #include the data in the order specified above, include formatting
+  place_data$ownership_per_change_nonHisp_white*100,  
+  place_data$ownership_per_change_Asian*100, 
+  place_data$ownership_per_change_Latino*100,
+
+  prettyNum(place_data$ownership_count_change_Black, big.mark = ","), #include the data in the order specified above, include formatting
+  prettyNum(place_data$ownership_count_change_nonHisp_white, big.mark = ","),
+  prettyNum(place_data$ownership_count_change_Asian, big.mark = ","),
+  prettyNum(place_data$ownership_count_change_Latino, big.mark = ","),
+
+  prettyNum(place_data$median_household_income_Black, big.mark = ","),#include the data in the order specified above, include formatting
+  prettyNum(place_data$median_household_income_white, big.mark = ","),
+  prettyNum(place_data$median_household_income_Asian, big.mark = ","),
+  prettyNum(place_data$median_household_income_Hispanic, big.mark = ",")
+) %>% lapply(htmltools::HTML)
+
+##same structure as above
+labels_popup <- sprintf("<strong>%s</strong><br/>
+<i>%s</i><br/>
+Population in 2019: <strong>%s</strong><br/>
+Median value of owner-occupied homes, 2019: <strong>$%s</strong><br/>
+    <style>
+      table {
+        border-collapse: collapse;
+      }
+      td,
+      th {
+        padding: 5px;
+        border-bottom: 1.5px solid #1c87c9;
+      }
+    </style>
+<table>
+  <tr>
+    <td>&nbsp;</td>
+    <th>Black</td>
+    <th>White</td>
+    <th>Asian</td>
+    <th>Hispanic</td>
+  </tr>
+    <tr>
+    <td>Share of Population, `19</td>
+    <td>%1.1f%%</td>
+    <td>%1.1f%%</td>
+    <td>%1.1f%%</td>
+    <td>%1.1f%%</td>
+  </tr>
+    <tr>
+    <td>Homeownership Rate, `19</td>
+    <td>%1.1f%%</td>
+    <td>%1.1f%%</td>
+    <td>%1.1f%%</td>
+    <td>%1.1f%%</td>
+  </tr>
+  <tr>
+    <td>Change in Homeownership Rate<br>Percentage Points, '00-'19</td>
+    <td>%+1.1f</td>
+    <td>%+1.1f</td>
+    <td>%+1.1f</td>
+    <td>%+1.1f</td>
+  </tr>
+  <tr>
+    <td>Change in Number of Homeowners<br>Numeric, '00-'19</td>
+    <td>%+s</td>
+    <td>%+s</td>
+    <td>%+s</td>
+    <td>%+s</td>
+  </tr>
+    <tr>
+    <td>Median Household Income, `19</td>
+    <td>$%s</td>
+    <td>$%s</td>
+    <td>$%s</td>
+    <td>$%s</td>
+  </tr>
+</table>
+                        ",
+  place_data$NAME.y, 
+  place_data$Black_ownership_change_long,
+  prettyNum(place_data$pop_num, big.mark = ","),
+  prettyNum(place_data$median_value_own_occ, big.mark = ","),
+
+  place_data$share_pop_black*100,
+  place_data$share_pop_white*100,
+  place_data$share_pop_asian*100,
+  place_data$share_pop_hisp*100,
+
+  place_data$homeowner_rate_Black*100, 
+  place_data$homeowner_rate_nonHisp_white*100, 
+  place_data$homeowner_rate_Asian*100,  
+  place_data$homeowner_rate_Latino*100,  
+
+  place_data$ownership_per_change_Black*100, 
+  place_data$ownership_per_change_nonHisp_white*100,  
+  place_data$ownership_per_change_Asian*100, 
+  place_data$ownership_per_change_Latino*100,
+
+  prettyNum(place_data$ownership_count_change_Black, big.mark = ","),
+  prettyNum(place_data$ownership_count_change_nonHisp_white, big.mark = ","),
+  prettyNum(place_data$ownership_count_change_Asian, big.mark = ","),
+  prettyNum(place_data$ownership_count_change_Latino, big.mark = ","),
+
+  prettyNum(place_data$median_household_income_Black, big.mark = ","),
+  prettyNum(place_data$median_household_income_white, big.mark = ","),
+  prettyNum(place_data$median_household_income_Asian, big.mark = ","),
+  prettyNum(place_data$median_household_income_Hispanic, big.mark = ",")
+) %>% lapply(htmltools::HTML)
+```
+
+
+#### Figure 2: City-Level Change in Black Homeownership: Michigan
+*Zoom in and hover over the Zip Code Tabulation Areas to explore variations across the state*
+```{r, echo=FALSE,message = FALSE, warning=FALSE,  include=TRUE}
+MI_map <- leaflet(data = place_data) %>% addProviderTiles(providers$CartoDB.Positron) %>% #specify data source and shapefiles
+    setView(lng = -84.5, lat = 42.3, zoom = 8.4)%>% #set Zoom and view lat/long
+  addPolygons(fillColor = ~pal(Black_ownership_change), #add fill color scheme
+  weight = 1, #add line weight
+  opacity = 1, #add line opacity
+color = "#444444", #add line color
+  dashArray = "0", #add line style
+  fillOpacity = 0.8, #add fill opacity
+  highlight = highlightOptions( #mouseover/highlight parameters
+    weight = 2,
+    color = "white",
+    dashArray = "",
+    fillOpacity = 0.7,
+    bringToFront = TRUE),
+   label = labels_table, #add mouseover labels
+  popup = labels_popup, #add click popup labels
+  popupOptions = popupOptions(maxWidth = 900, closeOnClick = TRUE), #add click popup options
+   labelOptions = labelOptions(  #add label  options
+     style = list("font-weight" = "normal", padding = "3px 8px"),
+     textsize = "10px",
+     direction = "auto")
+)%>% 
+  addLegend(pal = pal, values = ~Black_ownership_change, opacity = 0.7, title = "Numeric and Perc. Point Change<br>in Black Homeownership, 00`-19`",
+  position = "bottomright")  #add legend, specify features
+
+MI_map
+#export interactive map as HMTL 
+#mapshot(MI_map, url =  "/Users/carlhedman/Documents/NYU/Race and homeownership blog/Final figures/Webfiles/MI_map.html")
+```
+*Source: 2015-2019 5-year American Community Survey and 2000 Decennial sf3 Census, Housing Solutions Lab.*
+
+<br>
+<br>
+
+#### Figure 3: City-Level Change in Black Homeownership: Texas
+*Zoom in and hover over the Zip Code Tabulation Areas to explore variations across the state*
+```{r, echo=FALSE,message = FALSE, warning=FALSE, include=TRUE}
+TX_map <- leaflet(data = place_data) %>% addProviderTiles(providers$CartoDB.Positron) %>% #specify data source and shapefiles
+    setView(lng = -96.90, lat = 32.54, zoom = 7)%>%
+  addPolygons(fillColor = ~pal(Black_ownership_change),
+  weight = 1,
+  opacity = 1,
+color = "#444444",
+  dashArray = "0",
+  fillOpacity = 0.8,
+  highlight = highlightOptions(
+    weight = 2,
+    color = "white",
+    dashArray = "",
+    fillOpacity = 0.7,
+    bringToFront = TRUE),
+   label = labels_table,
+  popup = labels_popup,
+  popupOptions = popupOptions(maxWidth = 1000, closeOnClick = TRUE),
+   labelOptions = labelOptions(
+     style = list("font-weight" = "normal", padding = "3px 8px"),
+     textsize = "10px",
+     direction = "auto")
+)%>% 
+  addLegend(pal = pal, values = ~Black_ownership_change, opacity = 0.7, title = "Numeric and Perc. Point Change<br>in Black Homeownership, 00`-19`",
+  position = "bottomright")
+
+TX_map
+#export interactive map as HMTL 
+#mapshot(TX_map, url =  "/Users/carlhedman/Documents/NYU/Race and homeownership blog/Final figures/Webfiles/TX_map.html")
+```
+*Source: 2015-2019 5-year American Community Survey and 2000 Decennial sf3 Census, Housing Solutions Lab.*
+
+
+#### Figure 4: City-Level Change in Black Homeownership: National
+*Zoom in and hover over the Zip Code Tabulation Areas to explore variations across the state*
+```{r, echo=FALSE,message = FALSE, warning=FALSE, include=TRUE}
+USA_map <- leaflet(data = place_data) %>% addProviderTiles(providers$CartoDB.Positron) %>%
+    setView(lng = -96.90, lat = 32.54, zoom = 4)%>%
+  addPolygons(fillColor = ~pal(Black_ownership_change),
+  group = "name",
+  weight = 1,
+  opacity = 1,
+color = "#444444",
+  dashArray = "0",
+  fillOpacity = 0.8,
+  highlight = highlightOptions(
+    weight = 2,
+    color = "white",
+    dashArray = "",
+    fillOpacity = 0.7,
+    bringToFront = TRUE),
+   label = labels_table,
+  popup = labels_popup,
+ popupOptions = popupOptions(maxWidth = 1000, closeOnClick = TRUE),
+   labelOptions = labelOptions(
+     style = list("font-weight" = "normal", padding = "3px 8px"),
+     textsize = "10px",
+     direction = "auto")
+)%>%
+  addLegend(pal = pal, values = ~Black_ownership_change, opacity = 0.7, title = "Numeric and Perc. Point Change<br>in Black Homeownership, 00`-19`",
+  position = "bottomright")%>%
+   addResetMapButton() %>%
+addSearchOSM(options = searchOptions(autoCollapse = TRUE, minLength = 2, zoom = 8, hideMarkerOnCollapse = TRUE)) ##add search bar
+
+USA_map
+
+#export interactive map as HMTL 
+#mapshot(USA_map, url =  "/Users/carlhedman/Documents/NYU/Race and homeownership blog/Final figures/Webfiles/USA_map.html")
+
+```
+
