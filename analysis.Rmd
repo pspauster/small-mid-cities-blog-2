@@ -241,6 +241,11 @@ pha_geo <- query_layer(endpoint = "https://services.arcgis.com/VTyQ9soqVukalItT/
   ),
     levels = c("Local", "Regional", "State"))) %>% 
   clean_names()
+
+pha_geo %>% as.data.frame() %>% count(pha_level) #36 total state PHAs
+
+pha_geo %>% as.data.frame() %>% filter(pha_level == "State") %>%  count(stusab) #31 states have a state PHA
+
 ```
 
 
@@ -653,6 +658,10 @@ mix_hh_served %>%
 
 # how many places had no vouchers or no public housing at all
 
+mix_hh_served %>% 
+  select(geoid, NAME, total_units, total_units_place_1_summary_of_all_hud_programs, total_units_place_2_public_housing, total_units_place_3_housing_choice_vouchers, total_units_place_5_project_based_section_8, size_type) %>% 
+  count(is.na(total_units_place_3_housing_choice_vouchers), is.na(total_units_place_2_public_housing))
+
 ```
 
 
@@ -669,7 +678,7 @@ mix_hh_served %>%
   ggplot()+
   geom_bar(aes(x="", y=sum, fill = size_type), stat="identity", width = 1)+
   coord_polar("y", start = 0)+
-  geom_text(aes(x = "", y = ypos, label = sum, color = size_type))+
+  geom_text(aes(x = "", y = ypos, label = scales::comma(sum), color = size_type))+
   scale_color_manual(values = c("black", "black", "white", "black"))+
   remove_ticks() +
   remove_axis() +
@@ -862,15 +871,19 @@ census_psh_places %>%
 ```{r}
 
 census_psh_places %>% 
-  select(pct_disabled_all_place_1_summary_of_all_hud_programs, size_type) %>% 
+  select(pct_disabled_lt62_place_1_summary_of_all_hud_programs, pct_disabled_ge62_place_1_summary_of_all_hud_programs, pct_age62plus_place_1_summary_of_all_hud_programs, size_type) %>% 
+  mutate_if(is.numeric, ~./100) %>% 
   group_by(size_type) %>% 
-  summarize(avg_disabled_share = mean(pct_disabled_all_place_1_summary_of_all_hud_programs/100, na.rm = TRUE)) %>% 
+  summarize(avg_disabled_share = mean((pct_disabled_lt62_place_1_summary_of_all_hud_programs*
+                                        (1-(pct_age62plus_place_1_summary_of_all_hud_programs))) +
+                                      (pct_disabled_ge62_place_1_summary_of_all_hud_programs*
+                                        ((pct_age62plus_place_1_summary_of_all_hud_programs))), na.rm = TRUE)) %>% #weighted average
   mutate(size_type = factor(size_type, levels = c("small (50-100k)", "small-mid (100-150k)",  "mid (150-500k)", "large (500k +)"))) %>% 
   ggplot()+
   geom_col(mapping = aes(x = size_type, y = avg_disabled_share)) +
   scale_y_continuous(expand = expand_scale(mult = c(0, 0.1)), labels = (scales::percent)) +
-  labs(title = "Average share of households with a disabled person is consistent across city sizes",
-       subtitle = "Average share of households with a disabled member by city type",
+  labs(title = "Average share of head of households who are disabled person is consistent across city sizes",
+       subtitle = "Average share of households with a disabled head by city type",
         x = NULL,
        y = NULL) +  
   remove_ticks() +
@@ -879,13 +892,59 @@ census_psh_places %>%
 
 ```
 
+Average sub amount
+
+```{r}
+census_psh_places %>% 
+  select(spending_per_month_place_1_summary_of_all_hud_programs, size_type) %>% 
+  group_by(size_type) %>% 
+  summarize(avg_hh_expend = mean(spending_per_month_place_1_summary_of_all_hud_programs, na.rm = TRUE)) %>% 
+  mutate(size_type = factor(size_type, levels = c("small (50-100k)", "small-mid (100-150k)",  "mid (150-500k)", "large (500k +)"))) %>% 
+  ggplot()+
+  geom_col(mapping = aes(x = size_type, y = avg_hh_expend)) +
+  scale_y_continuous(expand = expand_scale(mult = c(0, 0.1)), labels = scales::dollar) +
+  labs(title = "Household subsidy amount size is consistent across city types",
+       subtitle = "Average monthly household subsidy by city size",
+        x = NULL,
+       y = NULL) +  
+  remove_ticks() +
+  guides(color = FALSE)
+```
+
+
+```{r}
+census_psh_places %>% 
+  select(pct_lt50_median_place_1_summary_of_all_hud_programs, pct_lt30_median_place_1_summary_of_all_hud_programs, size_type) %>% 
+  pivot_longer(cols = starts_with("pct"), names_to = "series", values_to = "percentage") %>% 
+  mutate(series = case_when(
+    series == "pct_lt50_median_place_1_summary_of_all_hud_programs" ~ "very low income",
+    series == "pct_lt30_median_place_1_summary_of_all_hud_programs" ~ "extremely low income"
+  )) %>% 
+  group_by(size_type, series) %>% 
+  summarize(avg_share_li = mean(percentage/100, na.rm = TRUE)) %>% 
+  mutate(size_type = factor(size_type, levels = c("small (50-100k)", "small-mid (100-150k)",  "mid (150-500k)", "large (500k +)"))) %>% 
+  ggplot()+
+  geom_col(mapping = aes(x = size_type, y = avg_share_li, fill = series), position = "dodge") +
+  scale_y_continuous(expand = expand_scale(mult = c(0, 0.1)), labels = scales::percent) +
+  labs(title = "Share of Households that are Low Income is consistent across city size",
+       subtitle = "Average share of households with extremely low and very low income by city size",
+        x = NULL,
+       y = NULL) +  
+  remove_ticks() +
+  guides(color = FALSE)
+```
+
+
+
+
+
 check on... 1/5/21
--disability seems low
--add average housing assistance amount
--how many state phas are there
--how many w/no vouchers or no public housing
--proportion that live in low/med/high  pov
--how does the data define high poverty
+-disability seems low - done
+-add average housing assistance amount - done
+-how many state phas are there - done
+-how many w/no vouchers or no public housing - done
+-proportion that live in low/med/high  pov - all we have is very low income and extremely low income (below 50% ami and below 30% ami) - done
+-how does the data define high poverty (% of the population below poverty level in the census tract where HUD assisted family resides)
 
 
 
