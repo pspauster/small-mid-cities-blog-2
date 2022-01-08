@@ -44,6 +44,7 @@ library(curl)
 library(readxl)
 library(sf)
 library(urbnthemes)
+library(rvest)
 
 set_urbn_defaults()
 
@@ -284,14 +285,100 @@ psh_phas <- str_glue("PHA_{pic_year}.xlsx") %>%
 
 ```
 
+### Add MTW flag
+```{r}
+
+mtw_phas <- "https://www.hud.gov/program_offices/public_indian_housing/programs/ph/mtw/mtwagencies" %>% 
+  read_html() %>% 
+  html_nodes("table") %>% 
+  .[[1]] %>% 
+  html_table(fill=TRUE, header = TRUE) %>% 
+  clean_names() %>% 
+  mutate(state_ab = str_sub(mtw_agencies_and_state_location, start = -3, end = -2),
+         pha_name = tolower(str_sub(mtw_agencies_and_state_location, start = 1, end = -6)),
+         mtw_flag = 1) %>% 
+  select(state_ab, pha_name, mtw_flag) %>% 
+  mutate(pha_name = case_when( #fix names from link to match psh data
+    pha_name == "auburn housing authority" ~ "ha auburn",
+    pha_name == "brighton housing authority" ~ "housing authority of the city of brighton",
+    pha_name == "bristol redevelopment and housing authority" ~ "bristol redevelopment & housing authority",
+    pha_name == "charleston-kanawha housing authority" ~ "charleston/kanawha housing authority",
+    pha_name == "charlotte housing authority (inlivian)" ~ "inlivian",
+    pha_name == "housing authority of columbus, georgia" ~ "housing authority of the city of columbus",
+    pha_name == "district of columbia housing authority" ~ "d.c housing authority",
+    pha_name == "fairfax county redevelopment and housing authority" ~ "fairfax county redevelopment & hsg authority",
+    pha_name == "harrisonburg redevelopment and housing authority" ~ "harrisonburg redevelopment & housing authorit",
+    pha_name == "housing & redevelopment authority of hibbing" ~ "the hra of hibbing, minnesota",
+    pha_name == "kandiyohi county housing and redevelopment authority" ~ "kandiyohi county hra",
+    pha_name == "king county housing authority" ~ "ha of king county",
+    pha_name == "lawrence-douglas county housing authority" ~ "lawrence/douglas county housing authority",
+    str_detect(pha_name, "/") ~ str_replace(pha_name, "/", "-"), #online uses slashes not dashes
+    pha_name == "holyoke  housing authority" ~ "holyoke housing authority
+",
+    pha_name == "lexington-fayette urban county housing authority" ~ "housing authority of lexington",
+    pha_name == "massachusetts dept of housing and cd" ~ "department of housing & community development",
+    pha_name == "mcleod county housing and redevelopment authority" ~ "mcleod county hra",
+    pha_name == "minneapolis public housing authority" ~ "pha in and for the city of minneapolis",
+    pha_name == "housing authority of new haven (elm city communities)" ~ "housing authority of the city of new haven",
+    pha_name == "township of neptune housing authority" ~ "neptune housing authority",
+    pha_name == "new smyrna beach housing authority" ~ "housing authority of new smyrna beach",
+    pha_name == "housing authority of newnan" ~ "housing authority of the city of newnan",
+    pha_name == "ozark housing community" ~ "housing authority of the city of ozark",
+    pha_name == "housing authority of pocatello" ~ "housing authority of the city of pocatello",
+    pha_name == "city of pomona housing authority" ~ "housing authority of the city of pomona",
+    pha_name == "portsmouth redevelopment and housing authority" ~ "portsmouth redevelopment & housing authority",
+    pha_name == "housing authority of portland (home forward)" ~ "housing authority of portland",
+    pha_name == "housing authority of the city of reno" ~ "city of reno housing authority",
+    pha_name == "rosenberg housing authority" ~ "housing authority of the city of rosenberg",
+    pha_name == "ruston housing" ~ "housing authority of ruston",
+    pha_name == "housing authority of the county of salt lake (housing connect)" ~ "housing authority of the county of salt lake",
+    pha_name == "santa clara county housing authority - housing authority of the city of san jose" ~ "santa clara county housing authority",
+    pha_name == "solano county housing authority" ~ "county of solano hsg auth",
+    pha_name == "south sioux city" ~ "south sioux city housing agency",
+    pha_name == "tacoma housing authority" ~ "ha city of tacoma",
+    pha_name == "vancouver housing authority" ~ "housing authority of the city of vancouver",
+    pha_name == "washington county community development agency" ~ "washington county cda",
+    pha_name == "atlanta housing" ~ "housing authority of the city of atlanta georgia",
+    pha_name == "everett housing authority" ~ "ha city of everett",
+    pha_name == "randolph county housing authority" ~ "housing authority of randolph county",
+
+    T ~ pha_name
+  ))
+
+psh_phas_clean <- psh_phas %>% 
+  mutate(state_ab = str_sub(states, start = 1, end = 2),
+         pha_name = str_trim(tolower(name), "both"))
+  
+
+psh_phas_mtw <- left_join(psh_phas_clean, mtw_phas, by = c("state_ab", "pha_name")) %>% 
+  mutate(mtw_flag = case_when( #these refuse to match or are two different ha
+    pha_name == "housing authority of baltimore city" ~ 1,
+    pha_name == "housing authority of champaign county" ~ 1,
+    pha_name == "holyoke housing authority" & state_ab == "MA"~ 1,
+    pha_name == "santa clara county housing authority" ~ 1,
+    pha_name == "housing authority of the city of san jose" ~ 1,
+    T ~ mtw_flag
+  ))
+
+
+anti_join(mtw_phas, psh_phas_clean %>% 
+  mutate(state_ab = str_sub(states, start = 1, end = 2),
+         pha_name = str_trim(tolower(name), "both")),
+  by = c("state_ab", "pha_name"))
+
+
+
+```
+
+
 ### Reshape PSH data
 
 Want one row per housing authority/place to facilitate matching
 ```{r warning=FALSE}
 
-psh_phas_wide <- psh_phas %>% 
+psh_phas_wide <- psh_phas_mtw %>% 
   filter(program %in% c(1, 2, 3, 5)) %>% 
-  pivot_wider(id_cols = PARTICIPANT_CODE,
+  pivot_wider(id_cols = c(PARTICIPANT_CODE, pha_name, mtw_flag, state_ab),
               names_from = c(program, program_label),
               names_prefix = "pha_",
               values_from = c(          
@@ -935,9 +1022,6 @@ census_psh_places %>%
 ```
 
 
-
-
-
 check on... 1/5/21
 -disability seems low - done
 -add average housing assistance amount - done
@@ -946,13 +1030,94 @@ check on... 1/5/21
 -proportion that live in low/med/high  pov - all we have is very low income and extremely low income (below 50% ami and below 30% ami) - done
 -how does the data define high poverty (% of the population below poverty level in the census tract where HUD assisted family resides)
 
-
-
 small analysis for Kathy/Martha week of 1/5
 -PHAs listed under the small PHA cohort in this list from HUD: https://www.hud.gov/program_offices/public_indian_housing/programs/ph/mtw/mtwagencies
 -how many people they serve
 -the demographics you've been putting together, etc.
 -population of the cities/counties they serve, so we can know how many fall in our target range. 
+
+#check mtw phas list
+```{r}
+
+mtw_part_codes <- psh_phas_mtw %>% 
+  filter(mtw_flag == 1) %>% 
+  select(pha_name, PARTICIPANT_CODE, mtw_flag) %>% 
+  distinct() %>% 
+  janitor::clean_names()
+
+full_join(mtw_part_codes, mtw_phas, by = "pha_name") %>% 
+  campfin::flag_dupes(pha_name)
+
+#alaska, delaware, match to two phas based on name
+#i think alaska should be both - two different phas - one for voucher and one for PH
+#delware same thing
+```
+
+
+```{r}
+
+mtw_serving <- as.data.frame(all_cities_joined) %>% 
+  filter(mtw_flag==1) %>% 
+  group_by(participant_code, pha_level) %>% 
+  mutate(num_serving = n()) %>% 
+  select(participant_code, NAME, num_serving, size_type, pha_level) %>% 
+  #filter(pha_level != "State") %>% 
+  distinct() %>% 
+  left_join(mtw_part_codes,., by = "participant_code")
+
+mtw_serving %>% 
+  group_by(pha_level, size_type) %>% 
+  count()
+
+#total cities served by mtw agencies
+mtw_serving %>% 
+  mutate(target_size = case_when(
+    size_type %in% c("small (50-100k)", "small-mid (100-150k)", "mid (150-500k)") ~ "small or mid sized city",
+    T ~ "not target city"
+  )) %>% 
+  group_by(target_size) %>% 
+  count()
+
+#how many mtw phas serve a city
+mtw_serving %>% 
+  group_by(pha_name) %>% 
+  summarize(smallest_served = min(size_type)) %>% 
+  count(smallest_served)
+
+#how many target cities does each mtw pha serve
+mtw_serving %>%
+  mutate(target_size = case_when(
+    size_type %in% c("small (50-100k)", "small-mid (100-150k)", "mid (150-500k)") ~ 1,
+    T ~ 0
+  )) %>% 
+  group_by(pha_name) %>% 
+  summarize(target_cities_served = sum(target_size))
+
+#how many mtw agencies serve at least one target sized city
+mtw_serving %>% 
+  mutate(target_size = case_when(
+    size_type %in% c("small (50-100k)", "small-mid (100-150k)", "mid (150-500k)") ~ 1,
+    T ~ 0
+  )) %>% 
+  group_by(pha_name) %>% 
+  summarize(target_cities_served = max(target_size)) %>% 
+  count(target_cities_served)
+
+```
+
+
+```{r}
+
+
+
+
+
+
+```
+
+
+
+
 
 
 
