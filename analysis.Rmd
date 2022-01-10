@@ -1066,7 +1066,8 @@ mtw_serving <- as.data.frame(all_cities_joined) %>%
   left_join(mtw_part_codes,., by = "participant_code")
 
 mtw_serving %>% 
-  group_by(pha_level, size_type) %>% 
+  distinct(participant_code, pha_level) %>% 
+  group_by(pha_level) %>% 
   count()
 
 #total cities served by mtw agencies
@@ -1178,6 +1179,31 @@ psh_phas_wide %>%
   guides(color = FALSE)
 ```
 
+```{r}
+psh_phas_wide %>%
+  filter(mtw_flag == 1) %>% 
+  select(participant_code, mtw_flag,
+         total_units_pha_1_summary_of_all_hud_programs) %>% 
+  mutate(hhs_bracket = factor(case_when(
+    total_units_pha_1_summary_of_all_hud_programs < 1000 ~ "Less than 1000",
+    total_units_pha_1_summary_of_all_hud_programs >= 1000 & total_units_pha_1_summary_of_all_hud_programs < 5000 ~ "1,000-5,000",
+    total_units_pha_1_summary_of_all_hud_programs >= 5000 & total_units_pha_1_summary_of_all_hud_programs < 10000 ~ "5,000-10,000",
+    total_units_pha_1_summary_of_all_hud_programs >= 10000 ~ "10,000 or more"
+  ),levels = c(
+    "Less than 1000",
+    "1,000-5,000",
+    "5,000-10,000",
+    "10,000 or more"
+  ))) %>% 
+  count(hhs_bracket) %>% 
+ggplot()+
+  geom_col(mapping = aes(x = hhs_bracket, y = n))+
+  labs(title = "Most MTW agencies serve less than 5000 households",
+       subtitle = "Distribution of # of households served",
+       y = "Number of PHAs",
+       x = "# of households served",
+       caption = paste0("N=", 80))
+```
 
 
 
