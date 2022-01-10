@@ -279,7 +279,7 @@ download.file(str_glue("{pic_url_base}/files/PHA_{pic_year}.xlsx"),
 psh_places <- str_glue("PLACE_{pic_year}.xlsx") %>% 
   read_xlsx()
 
-psh_phas <- str_glue("PHA_{pic_year}.xlsx") %>% 
+psh_phas <- str_glue("PHA_{pic_year}.xlsx") %>% #there's no PB S8 in these data for some reason
   read_excel() %>% 
   rename(PARTICIPANT_CODE = code)
 
@@ -1108,14 +1108,75 @@ mtw_serving %>%
 
 ```{r}
 
-
-
-
+mtw_demo <- psh_phas_wide %>%
+  #filter(mtw_flag == 1) %>% 
+  select(participant_code, mtw_flag,
+         pct_white_nothsp_pha_1_summary_of_all_hud_programs, pct_asian_pacific_nonhsp_pha_1_summary_of_all_hud_programs, pct_black_nonhsp_pha_1_summary_of_all_hud_programs, pct_native_american_nonhsp_pha_1_summary_of_all_hud_programs,  pct_hispanic_pha_1_summary_of_all_hud_programs, pct_multi_pha_1_summary_of_all_hud_programs, number_reported_pha_1_summary_of_all_hud_programs,
+         total_units_pha_1_summary_of_all_hud_programs,
+         total_units_pha_1_summary_of_all_hud_programs, total_units_pha_2_public_housing, total_units_pha_3_housing_choice_vouchers) %>% 
+  mutate(mtw_cat = ifelse(is.na(mtw_flag), "Not MTW", "MTW"),
+         across(starts_with("pct"), ~.x*number_reported_pha_1_summary_of_all_hud_programs)
+         ) %>% 
+  pivot_longer(starts_with("pct_"), names_to = "race_eth", values_to = "value") %>% 
+  mutate(race_eth = case_when(
+    str_detect(race_eth, "black") ~ "Black",
+    str_detect(race_eth, "white") ~ "White",
+    str_detect(race_eth, "native") ~ "Native American",
+    str_detect(race_eth, "asian") ~ "Asian/Pacific Islander",
+    str_detect(race_eth, "hispanic") ~ "Hispanic",
+    str_detect(race_eth, "multi") ~ "Two or more races"
+  ))
 
 
 ```
 
+```{r}
+mtw_demo %>% 
+  group_by(race_eth, mtw_cat) %>% 
+  summarize(count = sum(value, na.rm = TRUE)) %>% 
+  #mutate(size_type = factor(size_type, levels = c("small (50-100k)", "small-mid (100-150k)",  "mid (150-500k)", "large (500k +)"))) %>% 
+  ggplot()+
+  geom_col(mapping = aes(x = mtw_cat, y = count, fill = race_eth), position = "fill") +
+  scale_y_continuous(expand = expand_scale(mult = c(0, 0.1)), labels = scales::percent) +
+  labs(title = "MTW agency households are more likely to be black and less likely to be white",
+       subtitle = "Share of subsidized households by race and ethnicity",
+        x = NULL,
+       y = NULL,
+       caption = paste0("N =", nrow(mtw_phas), " MTW agencies, ", nrow(psh_phas_wide)-nrow(mtw_phas), " non MTW agencies")) +  
+  remove_ticks() +
+  guides(color = FALSE)
+```
 
+```{r}
+psh_phas_wide %>%
+  #filter(mtw_flag == 1) %>% 
+  select(participant_code, mtw_flag,
+         total_units_pha_1_summary_of_all_hud_programs,
+         total_units_pha_1_summary_of_all_hud_programs, total_units_pha_2_public_housing, total_units_pha_3_housing_choice_vouchers) %>% 
+  mutate(mtw_cat = ifelse(is.na(mtw_flag), "Not MTW", "MTW"),
+         across(starts_with("pct"), ~.x*number_reported_pha_1_summary_of_all_hud_programs)
+         ) %>% 
+  pivot_longer(starts_with("total_units"), names_to = "program", values_to = "units") %>% 
+  filter(! program %in% c("total_units_pha_1_summary_of_all_hud_programs", "total_units")) %>% 
+  mutate(program = case_when(
+    program == "total_units_pha_2_public_housing" ~ "Public housing",
+    program == "total_units_pha_3_housing_choice_vouchers" ~ "Housing choice vouchers",
+    #program == "total_units_pha_5_project_based_section_8" ~ "Project based section 8"
+  )) %>% 
+  group_by(mtw_cat, program) %>% 
+  summarize(units = sum(units, na.rm = TRUE)) %>% 
+  #mutate(size_type = factor(size_type, levels = c("small (50-100k)", "small-mid (100-150k)",  "mid (150-500k)", "large (500k +)"))) %>% 
+  ggplot()+
+  geom_col(mapping = aes(x = mtw_cat, y = units, fill = program), position = "fill") +
+  scale_y_continuous(expand = expand_scale(mult = c(0, 0.1)), labels = scales::percent) +
+  labs(title = "MTW agencies have slightly higher proportions of housing vouchers as a percentage of total subsidized units",
+       subtitle = "Share of subsidized units by program",
+        x = NULL,
+       y = NULL,
+       caption = paste0("N =", nrow(mtw_phas), " MTW agencies, ", nrow(psh_phas_wide)-nrow(mtw_phas), " non MTW agencies")) +  
+  remove_ticks() +
+  guides(color = FALSE)
+```
 
 
 
