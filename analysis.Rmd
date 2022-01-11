@@ -243,6 +243,8 @@ pha_geo <- query_layer(endpoint = "https://services.arcgis.com/VTyQ9soqVukalItT/
     levels = c("Local", "Regional", "State"))) %>% 
   clean_names()
 
+saveRDS(pha_geo, file = "pha_service_areas.rds")
+
 pha_geo %>% as.data.frame() %>% count(pha_level) #36 total state PHAs
 
 pha_geo %>% as.data.frame() %>% filter(pha_level == "State") %>%  count(stusab) #31 states have a state PHA
@@ -296,8 +298,9 @@ mtw_phas <- "https://www.hud.gov/program_offices/public_indian_housing/programs/
   clean_names() %>% 
   mutate(state_ab = str_sub(mtw_agencies_and_state_location, start = -3, end = -2),
          pha_name = tolower(str_sub(mtw_agencies_and_state_location, start = 1, end = -6)),
-         mtw_flag = 1) %>% 
-  select(state_ab, pha_name, mtw_flag) %>% 
+         mtw_flag = 1,
+         cohort = initial_or_expansion_agency) %>% 
+  select(state_ab, pha_name, mtw_flag, cohort) %>% 
   mutate(pha_name = case_when( #fix names from link to match psh data
     pha_name == "auburn housing authority" ~ "ha auburn",
     pha_name == "brighton housing authority" ~ "housing authority of the city of brighton",
@@ -358,6 +361,14 @@ psh_phas_mtw <- left_join(psh_phas_clean, mtw_phas, by = c("state_ab", "pha_name
     pha_name == "santa clara county housing authority" ~ 1,
     pha_name == "housing authority of the city of san jose" ~ 1,
     T ~ mtw_flag
+  ),
+  cohort = case_when( #these refuse to match or are two different ha
+    pha_name == "housing authority of baltimore city" ~ "Initial",
+    pha_name == "housing authority of champaign county" ~ "Initial",
+    pha_name == "holyoke housing authority" & state_ab == "MA"~ "Initial",
+    pha_name == "santa clara county housing authority" ~ "Initial",
+    pha_name == "housing authority of the city of san jose" ~"Initial",
+    T ~ cohort
   ))
 
 
@@ -378,7 +389,7 @@ Want one row per housing authority/place to facilitate matching
 
 psh_phas_wide <- psh_phas_mtw %>% 
   filter(program %in% c(1, 2, 3, 5)) %>% 
-  pivot_wider(id_cols = c(PARTICIPANT_CODE, pha_name, mtw_flag, state_ab),
+  pivot_wider(id_cols = c(PARTICIPANT_CODE, pha_name, mtw_flag, cohort, state_ab),
               names_from = c(program, program_label),
               names_prefix = "pha_",
               values_from = c(          
@@ -1041,9 +1052,11 @@ small analysis for Kathy/Martha week of 1/5
 
 mtw_part_codes <- psh_phas_mtw %>% 
   filter(mtw_flag == 1) %>% 
-  select(pha_name, PARTICIPANT_CODE, mtw_flag) %>% 
+  select(pha_name, PARTICIPANT_CODE, mtw_flag, cohort) %>% 
   distinct() %>% 
   janitor::clean_names()
+
+mtw_part_codes %>% count(cohort)
 
 full_join(mtw_part_codes, mtw_phas, by = "pha_name") %>% 
   campfin::flag_dupes(pha_name)
@@ -1066,8 +1079,8 @@ mtw_serving <- as.data.frame(all_cities_joined) %>%
   left_join(mtw_part_codes,., by = "participant_code")
 
 mtw_serving %>% 
-  distinct(participant_code, pha_level) %>% 
-  group_by(pha_level) %>% 
+  distinct(participant_code, pha_level, cohort) %>% 
+  group_by(pha_level, cohort) %>% 
   count()
 
 #total cities served by mtw agencies
@@ -1076,12 +1089,12 @@ mtw_serving %>%
     size_type %in% c("small (50-100k)", "small-mid (100-150k)", "mid (150-500k)") ~ "small or mid sized city",
     T ~ "not target city"
   )) %>% 
-  group_by(target_size) %>% 
+  group_by(target_size, cohort) %>% 
   count()
 
 #how many mtw phas serve a city
 mtw_serving %>% 
-  group_by(pha_name) %>% 
+  group_by(pha_name, cohort) %>% 
   summarize(smallest_served = min(size_type)) %>% 
   count(smallest_served)
 
@@ -1091,7 +1104,7 @@ mtw_serving %>%
     size_type %in% c("small (50-100k)", "small-mid (100-150k)", "mid (150-500k)") ~ 1,
     T ~ 0
   )) %>% 
-  group_by(pha_name) %>% 
+  group_by(pha_name, cohort) %>% 
   summarize(target_cities_served = sum(target_size))
 
 #how many mtw agencies serve at least one target sized city
@@ -1111,11 +1124,13 @@ mtw_serving %>%
 
 mtw_demo <- psh_phas_wide %>%
   #filter(mtw_flag == 1) %>% 
-  select(participant_code, mtw_flag,
+  select(participant_code, mtw_flag, cohort,
          pct_white_nothsp_pha_1_summary_of_all_hud_programs, pct_asian_pacific_nonhsp_pha_1_summary_of_all_hud_programs, pct_black_nonhsp_pha_1_summary_of_all_hud_programs, pct_native_american_nonhsp_pha_1_summary_of_all_hud_programs,  pct_hispanic_pha_1_summary_of_all_hud_programs, pct_multi_pha_1_summary_of_all_hud_programs, number_reported_pha_1_summary_of_all_hud_programs,
          total_units_pha_1_summary_of_all_hud_programs,
          total_units_pha_1_summary_of_all_hud_programs, total_units_pha_2_public_housing, total_units_pha_3_housing_choice_vouchers) %>% 
-  mutate(mtw_cat = ifelse(is.na(mtw_flag), "Not MTW", "MTW"),
+  mutate(mtw_cat = factor(
+    ifelse(is.na(cohort), "Not MTW", cohort), levels = c("Initial", "Stepped and Tiered Rent Cohort", "MTW Flexibility for Smaller PHAs Cohort", "Not MTW")
+    ),
          across(starts_with("pct"), ~.x*number_reported_pha_1_summary_of_all_hud_programs)
          ) %>% 
   pivot_longer(starts_with("pct_"), names_to = "race_eth", values_to = "value") %>% 
@@ -1151,10 +1166,12 @@ mtw_demo %>%
 ```{r}
 psh_phas_wide %>%
   #filter(mtw_flag == 1) %>% 
-  select(participant_code, mtw_flag,
+  select(participant_code, mtw_flag, cohort,
          total_units_pha_1_summary_of_all_hud_programs,
          total_units_pha_1_summary_of_all_hud_programs, total_units_pha_2_public_housing, total_units_pha_3_housing_choice_vouchers) %>% 
-  mutate(mtw_cat = ifelse(is.na(mtw_flag), "Not MTW", "MTW"),
+  mutate(mtw_cat = factor(
+    ifelse(is.na(cohort), "Not MTW", cohort), levels = c("Initial", "Stepped and Tiered Rent Cohort", "MTW Flexibility for Smaller PHAs Cohort", "Not MTW")
+    ),
          across(starts_with("pct"), ~.x*number_reported_pha_1_summary_of_all_hud_programs)
          ) %>% 
   pivot_longer(starts_with("total_units"), names_to = "program", values_to = "units") %>% 
@@ -1181,16 +1198,18 @@ psh_phas_wide %>%
 
 ```{r}
 psh_phas_wide %>%
-  filter(mtw_flag == 1) %>% 
+  filter(cohort == "MTW Flexibility for Smaller PHAs Cohort") %>% 
   select(participant_code, mtw_flag,
          total_units_pha_1_summary_of_all_hud_programs) %>% 
   mutate(hhs_bracket = factor(case_when(
-    total_units_pha_1_summary_of_all_hud_programs < 1000 ~ "Less than 1000",
+    total_units_pha_1_summary_of_all_hud_programs < 500 ~ "Less than 500",
+    total_units_pha_1_summary_of_all_hud_programs >= 500 & total_units_pha_1_summary_of_all_hud_programs < 1000 ~ "500-1,000",
     total_units_pha_1_summary_of_all_hud_programs >= 1000 & total_units_pha_1_summary_of_all_hud_programs < 5000 ~ "1,000-5,000",
     total_units_pha_1_summary_of_all_hud_programs >= 5000 & total_units_pha_1_summary_of_all_hud_programs < 10000 ~ "5,000-10,000",
     total_units_pha_1_summary_of_all_hud_programs >= 10000 ~ "10,000 or more"
   ),levels = c(
-    "Less than 1000",
+    "Less than 500",
+    "500-1,000",
     "1,000-5,000",
     "5,000-10,000",
     "10,000 or more"
@@ -1198,11 +1217,11 @@ psh_phas_wide %>%
   count(hhs_bracket) %>% 
 ggplot()+
   geom_col(mapping = aes(x = hhs_bracket, y = n))+
-  labs(title = "Most MTW agencies serve less than 5000 households",
+  labs(title = "All small cohort agencies serve less than 1000 hh",
        subtitle = "Distribution of # of households served",
        y = "Number of PHAs",
        x = "# of households served",
-       caption = paste0("N=", 80))
+       caption = paste0("N=", 31))
 ```
 
 
